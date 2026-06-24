@@ -42,7 +42,7 @@
 <body>
     <div class="container">
         <h1>📷 BarcodeVault Pro</h1>
-        
+
         <div class="upload-zone" id="dropZone">
             <p>Drop images here or click to upload</p>
             <p style="font-size: 12px; color: #888;">Supports: JPG, PNG, WebP, BMP, GIF</p>
@@ -120,24 +120,58 @@
         const sensitivitySlider = document.getElementById('sensitivitySlider');
         const sensitivityValue = document.getElementById('sensitivityValue');
 
-        // ===== ZXING SETUP =====
-        const codeReader = new ZXing.BrowserMultiFormatReader();
-        const hints = new Map();
-        hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-        hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-            ZXing.BarcodeFormat.QR_CODE,
-            ZXing.BarcodeFormat.CODE_128,
-            ZXing.BarcodeFormat.EAN_13,
-            ZXing.BarcodeFormat.EAN_8,
-            ZXing.BarcodeFormat.UPC_A,
-            ZXing.BarcodeFormat.UPC_E,
-            ZXing.BarcodeFormat.CODE_39,
-            ZXing.BarcodeFormat.PDF_417,
-            ZXing.BarcodeFormat.AZTEC,
-            ZXing.BarcodeFormat.DATA_MATRIX,
-            ZXing.BarcodeFormat.ITF,
-            ZXing.BarcodeFormat.CODABAR
-        ]);
+        // ===== FORMAT NAME MAP =====
+        // ZXing returns numeric enum values — map them to readable strings
+        const FORMAT_NAMES = {
+            0:  'AZTEC',
+            1:  'CODABAR',
+            2:  'CODE_39',
+            3:  'CODE_93',
+            4:  'CODE_128',
+            5:  'DATA_MATRIX',
+            6:  'EAN_8',
+            7:  'EAN_13',
+            8:  'ITF',
+            9:  'MAXICODE',
+            10: 'PDF_417',
+            11: 'QR_CODE',
+            12: 'RSS_14',
+            13: 'RSS_EXPANDED',
+            14: 'UPC_A',
+            15: 'UPC_E',
+            16: 'UPC_EAN_EXTENSION'
+        };
+
+        function getFormatName(fmt) {
+            if (fmt === null || fmt === undefined) return 'Unknown';
+            // If already a string (future-proof)
+            if (typeof fmt === 'string') return fmt;
+            // Numeric enum
+            return FORMAT_NAMES[fmt] || String(fmt);
+        }
+
+        // ===== ZXING READER FACTORY =====
+        // We create a fresh BrowserMultiFormatReader with hints each time we need it.
+        // Setting hints via the constructor map is the correct v0.19.x API.
+        function makeReader() {
+            const hints = new Map();
+            hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+            hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+                ZXing.BarcodeFormat.QR_CODE,
+                ZXing.BarcodeFormat.CODE_128,
+                ZXing.BarcodeFormat.EAN_13,
+                ZXing.BarcodeFormat.EAN_8,
+                ZXing.BarcodeFormat.UPC_A,
+                ZXing.BarcodeFormat.UPC_E,
+                ZXing.BarcodeFormat.CODE_39,
+                ZXing.BarcodeFormat.PDF_417,
+                ZXing.BarcodeFormat.AZTEC,
+                ZXing.BarcodeFormat.DATA_MATRIX,
+                ZXing.BarcodeFormat.ITF,
+                ZXing.BarcodeFormat.CODABAR
+            ]);
+            return new ZXing.BrowserMultiFormatReader(hints);
+        }
 
         // ===== SENSITIVITY =====
         sensitivitySlider.addEventListener('input', () => {
@@ -149,28 +183,26 @@
             const ctx = canvas.getContext('2d');
             const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
             const data = imageData.data;
-            
-            // Contrast adjustment based on sensitivity
+
             const factor = 1.0 + (sensitivity - 1) * 0.3;
             for (let i = 0; i < data.length; i += 4) {
-                data[i] = Math.min(255, Math.max(0, 128 + factor * (data[i] - 128)));
+                data[i]   = Math.min(255, Math.max(0, 128 + factor * (data[i]   - 128)));
                 data[i+1] = Math.min(255, Math.max(0, 128 + factor * (data[i+1] - 128)));
                 data[i+2] = Math.min(255, Math.max(0, 128 + factor * (data[i+2] - 128)));
             }
-            
-            // Simple sharpening
+
             if (sensitivity >= 3) {
                 const width = canvas.width;
                 const height = canvas.height;
                 const output = new Uint8ClampedArray(data);
-                
                 for (let y = 1; y < height - 1; y++) {
                     for (let x = 1; x < width - 1; x++) {
                         for (let c = 0; c < 3; c++) {
                             const idx = (y * width + x) * 4 + c;
-                            const sum = -data[((y-1)*width + (x-1))*4 + c] - data[((y-1)*width + x)*4 + c] - data[((y-1)*width + (x+1))*4 + c]
-                                      - data[(y*width + (x-1))*4 + c] + 9*data[idx] - data[(y*width + (x+1))*4 + c]
-                                      - data[((y+1)*width + (x-1))*4 + c] - data[((y+1)*width + x)*4 + c] - data[((y+1)*width + (x+1))*4 + c];
+                            const sum =
+                                -data[((y-1)*width + (x-1))*4 + c] - data[((y-1)*width + x)*4 + c] - data[((y-1)*width + (x+1))*4 + c]
+                                -data[(y*width + (x-1))*4 + c] + 9*data[idx] - data[(y*width + (x+1))*4 + c]
+                                -data[((y+1)*width + (x-1))*4 + c] - data[((y+1)*width + x)*4 + c] - data[((y+1)*width + (x+1))*4 + c];
                             output[idx] = Math.min(255, Math.max(0, sum));
                         }
                     }
@@ -182,124 +214,92 @@
         }
 
         // ===== ROTATE CANVAS =====
-        function rotateCanvas(canvas, angle) {
+        function rotateCanvas(srcCanvas, angle) {
             const rotated = document.createElement('canvas');
             const ctx = rotated.getContext('2d');
-            
             if (angle === 90 || angle === 270) {
-                rotated.width = canvas.height;
-                rotated.height = canvas.width;
+                rotated.width  = srcCanvas.height;
+                rotated.height = srcCanvas.width;
             } else {
-                rotated.width = canvas.width;
-                rotated.height = canvas.height;
+                rotated.width  = srcCanvas.width;
+                rotated.height = srcCanvas.height;
             }
-            
             ctx.translate(rotated.width / 2, rotated.height / 2);
             ctx.rotate(angle * Math.PI / 180);
-            ctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
-            
+            ctx.drawImage(srcCanvas, -srcCanvas.width / 2, -srcCanvas.height / 2);
             return rotated;
+        }
+
+        // ===== CANVAS → BLOB URL =====
+        // ZXing v0.19.x's decodeFromImageUrl is the safest cross-browser path.
+        // We convert each canvas variant to a blob URL, decode, then revoke.
+        function canvasToBlobUrl(canvas) {
+            return new Promise((resolve, reject) => {
+                canvas.toBlob(blob => {
+                    if (!blob) return reject(new Error('toBlob failed'));
+                    resolve(URL.createObjectURL(blob));
+                }, 'image/png');
+            });
+        }
+
+        async function tryDecodeUrl(reader, url) {
+            try {
+                const result = await reader.decodeFromImageUrl(url);
+                if (result && result.getText()) {
+                    return {
+                        value:  result.getText(),
+                        format: getFormatName(result.getBarcodeFormat())
+                    };
+                }
+            } catch (_) {
+                // NotFoundException or similar — just means no barcode found
+            }
+            return null;
         }
 
         // ===== DECODE IMAGE =====
         async function decodeImage(canvas) {
             const sensitivity = parseInt(sensitivitySlider.value);
-            const angles = [0, 90, 180, 270];
-            
-            // Try original and preprocessed versions
-            const versions = [canvas];
-            
-            // Add preprocessed version
-            const processedCanvas = document.createElement('canvas');
-            processedCanvas.width = canvas.width;
-            processedCanvas.height = canvas.height;
-            const pCtx = processedCanvas.getContext('2d');
-            pCtx.drawImage(canvas, 0, 0);
-            preprocessImage(processedCanvas, sensitivity);
-            versions.push(processedCanvas);
-            
-            // Add scaled versions for large images
+            const reader = makeReader();
+
+            // Build canvas variants
+            const variants = [canvas];
+
+            // Preprocessed
+            const processed = document.createElement('canvas');
+            processed.width  = canvas.width;
+            processed.height = canvas.height;
+            processed.getContext('2d').drawImage(canvas, 0, 0);
+            preprocessImage(processed, sensitivity);
+            variants.push(processed);
+
+            // Downscaled (helps some decoders on very large images)
             if (canvas.width > 2000 || canvas.height > 2000) {
                 const scale = 0.5;
-                const scaledCanvas = document.createElement('canvas');
-                scaledCanvas.width = canvas.width * scale;
-                scaledCanvas.height = canvas.height * scale;
-                const sCtx = scaledCanvas.getContext('2d');
-                sCtx.drawImage(canvas, 0, 0, scaledCanvas.width, scaledCanvas.height);
-                versions.push(scaledCanvas);
+                const scaled = document.createElement('canvas');
+                scaled.width  = Math.round(canvas.width  * scale);
+                scaled.height = Math.round(canvas.height * scale);
+                scaled.getContext('2d').drawImage(canvas, 0, 0, scaled.width, scaled.height);
+                variants.push(scaled);
             }
-            
-            for (const version of versions) {
-                for (const angle of angles) {
-                    try {
-                        const rotated = angle === 0 ? version : rotateCanvas(version, angle);
-                        const result = await codeReader.decodeFromCanvas(rotated, hints);
-                        if (result && result.text) {
-                            return {
-                                value: result.text,
-                                format: result.format ? result.format.name || result.format : 'Unknown'
-                            };
-                        }
-                    } catch (e) {
-                        // Continue trying
-                    }
-                }
-            }
-            return null;
-        }
 
-        // ===== PROCESS FILES =====
-        async function processFiles(files) {
-            if (isProcessing) return;
-            isProcessing = true;
-            
-            const validFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
-            if (validFiles.length === 0) {
-                showStatus('No valid image files found.', 'error');
-                isProcessing = false;
-                return;
-            }
-            
-            showStatus(`Processing ${validFiles.length} images...`, 'processing');
-            progressBar.style.display = 'block';
-            
-            let processed = 0;
-            let found = 0;
-            
-            for (const file of validFiles) {
-                try {
-                    const image = await loadImage(file);
-                    const canvas = document.createElement('canvas');
-                    canvas.width = image.width;
-                    canvas.height = image.height;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(image, 0, 0);
-                    
-                    const result = await decodeImage(canvas);
-                    
-                    if (result) {
-                        barcodeData.push({
-                            id: barcodeData.length + 1,
-                            value: result.value,
-                            format: result.format,
-                            image: file.name,
-                            timestamp: new Date().toISOString()
-                        });
-                        found++;
+            const angles = [0, 90, 180, 270];
+
+            for (const variant of variants) {
+                for (const angle of angles) {
+                    const src = angle === 0 ? variant : rotateCanvas(variant, angle);
+                    let url;
+                    try {
+                        url = await canvasToBlobUrl(src);
+                        const result = await tryDecodeUrl(reader, url);
+                        if (result) return result;
+                    } finally {
+                        if (url) URL.revokeObjectURL(url);
                     }
-                    
-                    processed++;
-                    progressFill.style.width = `${(processed / validFiles.length) * 100}%`;
-                    
-                } catch (e) {
-                    console.error('Error processing file:', file.name, e);
                 }
             }
-            
-            progressBar.style.display = 'none';
-            showStatus(`Processed ${processed} images. Found ${found} barcodes.`, 'done');
-            renderTable();
-            isProcessing = false;
+
+            return null;
         }
 
         // ===== LOAD IMAGE =====
@@ -308,7 +308,7 @@
                 const reader = new FileReader();
                 reader.onload = (e) => {
                     const img = new Image();
-                    img.onload = () => resolve(img);
+                    img.onload  = () => resolve(img);
                     img.onerror = reject;
                     img.src = e.target.result;
                 };
@@ -317,46 +317,104 @@
             });
         }
 
+        // ===== PROCESS FILES =====
+        async function processFiles(files) {
+            if (isProcessing) return;
+            isProcessing = true;
+
+            const validFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
+            if (validFiles.length === 0) {
+                showStatus('No valid image files found.', 'error');
+                isProcessing = false;
+                return;
+            }
+
+            showStatus(`Processing ${validFiles.length} image(s)…`, 'processing');
+            progressBar.style.display = 'block';
+            progressFill.style.width  = '0%';
+
+            let processed = 0;
+            let found     = 0;
+
+            for (const file of validFiles) {
+                try {
+                    const img = await loadImage(file);
+                    const canvas = document.createElement('canvas');
+                    canvas.width  = img.width;
+                    canvas.height = img.height;
+                    canvas.getContext('2d').drawImage(img, 0, 0);
+
+                    const result = await decodeImage(canvas);
+                    if (result) {
+                        barcodeData.push({
+                            id:        barcodeData.length + 1,
+                            value:     result.value,
+                            format:    result.format,
+                            image:     file.name,
+                            timestamp: new Date().toISOString()
+                        });
+                        found++;
+                    }
+                } catch (e) {
+                    console.error('Error processing file:', file.name, e);
+                }
+
+                processed++;
+                progressFill.style.width = `${(processed / validFiles.length) * 100}%`;
+            }
+
+            progressBar.style.display = 'none';
+            showStatus(`Processed ${processed} image(s). Found ${found} barcode(s).`, 'done');
+            renderTable();
+            isProcessing = false;
+        }
+
         // ===== RENDER TABLE =====
         function renderTable() {
             const search = searchInput.value.toLowerCase();
             const format = formatFilter.value;
-            
+
             let filtered = barcodeData.filter(item => {
-                const matchesSearch = item.value.toLowerCase().includes(search) || 
-                                     item.image.toLowerCase().includes(search);
-                const matchesFormat = !format || item.format === format;
+                const matchesSearch  = item.value.toLowerCase().includes(search) ||
+                                       item.image.toLowerCase().includes(search);
+                const matchesFormat  = !format || item.format === format;
                 return matchesSearch && matchesFormat;
             });
-            
-            // Sort
+
             filtered.sort((a, b) => {
                 let valA, valB;
-                switch(sortColumn) {
-                    case 0: valA = a.id; valB = b.id; break;
-                    case 1: valA = a.value; valB = b.value; break;
-                    case 2: valA = a.format; valB = b.format; break;
-                    case 3: valA = a.image; valB = b.image; break;
+                switch (sortColumn) {
+                    case 0: valA = a.id;        valB = b.id;        break;
+                    case 1: valA = a.value;     valB = b.value;     break;
+                    case 2: valA = a.format;    valB = b.format;    break;
+                    case 3: valA = a.image;     valB = b.image;     break;
                     case 4: valA = a.timestamp; valB = b.timestamp; break;
-                    default: valA = a.id; valB = b.id;
+                    default: valA = a.id;       valB = b.id;
                 }
-                
                 if (typeof valA === 'string') {
                     return sortAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
                 }
                 return sortAsc ? valA - valB : valB - valA;
             });
-            
+
             tableBody.innerHTML = filtered.map(item => `
                 <tr>
                     <td>${item.id}</td>
-                    <td>${item.value}</td>
-                    <td>${item.format}</td>
-                    <td>${item.image}</td>
+                    <td>${escHtml(item.value)}</td>
+                    <td>${escHtml(item.format)}</td>
+                    <td>${escHtml(item.image)}</td>
                     <td>${new Date(item.timestamp).toLocaleString()}</td>
-                    <td><span class="copy-btn" onclick="copyValue('${item.value.replace(/'/g, "\'")}')">📋</span></td>
+                    <td><span class="copy-btn" onclick="copyValue(${JSON.stringify(item.value)})">📋</span></td>
                 </tr>
             `).join('');
+        }
+
+        function escHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
         }
 
         // ===== SORT =====
@@ -365,34 +423,29 @@
                 sortAsc = !sortAsc;
             } else {
                 sortColumn = col;
-                sortAsc = true;
+                sortAsc    = true;
             }
             renderTable();
         }
 
         // ===== COPY =====
         function copyValue(value) {
-            navigator.clipboard.writeText(value).then(() => {
-                showStatus('Copied to clipboard!', 'done');
-            }).catch(() => {
-                // Fallback
-                const textarea = document.createElement('textarea');
-                textarea.value = value;
-                document.body.appendChild(textarea);
-                textarea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textarea);
-                showStatus('Copied to clipboard!', 'done');
-            });
+            navigator.clipboard.writeText(value)
+                .then(() => showStatus('Copied to clipboard!', 'done'))
+                .catch(() => {
+                    const ta = document.createElement('textarea');
+                    ta.value = value;
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                    showStatus('Copied to clipboard!', 'done');
+                });
         }
 
         // ===== EXPORT =====
         function exportExcel() {
-            if (barcodeData.length === 0) {
-                showStatus('No data to export.', 'error');
-                return;
-            }
-            
+            if (barcodeData.length === 0) { showStatus('No data to export.', 'error'); return; }
             const ws = XLSX.utils.json_to_sheet(barcodeData);
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'Barcodes');
@@ -401,17 +454,13 @@
         }
 
         function exportCSV() {
-            if (barcodeData.length === 0) {
-                showStatus('No data to export.', 'error');
-                return;
-            }
-            
-            const ws = XLSX.utils.json_to_sheet(barcodeData);
+            if (barcodeData.length === 0) { showStatus('No data to export.', 'error'); return; }
+            const ws  = XLSX.utils.json_to_sheet(barcodeData);
             const csv = XLSX.utils.sheet_to_csv(ws);
             const blob = new Blob([csv], { type: 'text/csv' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
+            const url  = URL.createObjectURL(blob);
+            const a    = document.createElement('a');
+            a.href     = url;
             a.download = `barcodes_${Date.now()}.csv`;
             a.click();
             URL.revokeObjectURL(url);
@@ -422,18 +471,19 @@
         function importCSV(event) {
             const file = event.target.files[0];
             if (!file) return;
-            
             const reader = new FileReader();
             reader.onload = (e) => {
                 try {
-                    const data = XLSX.utils.sheet_to_json(XLSX.read(e.target.result, {type: 'string'}).Sheets.Sheet1);
+                    const wb   = XLSX.read(e.target.result, { type: 'string' });
+                    const ws   = wb.Sheets[wb.SheetNames[0]];
+                    const data = XLSX.utils.sheet_to_json(ws);
                     data.forEach(item => {
                         barcodeData.push({
-                            id: barcodeData.length + 1,
-                            value: item.value || item.Barcode || '',
-                            format: item.format || item.Format || 'Unknown',
-                            image: item.image || item.Image || 'Imported',
-                            timestamp: item.timestamp || item.Timestamp || new Date().toISOString()
+                            id:        barcodeData.length + 1,
+                            value:     item.value     || item.Barcode    || '',
+                            format:    item.format    || item.Format     || 'Unknown',
+                            image:     item.image     || item.Image      || 'Imported',
+                            timestamp: item.timestamp || item.Timestamp  || new Date().toISOString()
                         });
                     });
                     renderTable();
@@ -458,12 +508,10 @@
 
         // ===== STATUS =====
         function showStatus(message, type) {
-            statusDiv.textContent = message;
-            statusDiv.className = `status ${type}`;
+            statusDiv.textContent  = message;
+            statusDiv.className    = `status ${type}`;
             statusDiv.style.display = 'block';
-            setTimeout(() => {
-                statusDiv.style.display = 'none';
-            }, 5000);
+            setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
         }
 
         // ===== EVENT LISTENERS =====
@@ -472,15 +520,11 @@
             e.preventDefault();
             dropZone.classList.add('dragover');
         });
-        dropZone.addEventListener('dragleave', () => {
-            dropZone.classList.remove('dragover');
-        });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
         dropZone.addEventListener('drop', (e) => {
             e.preventDefault();
             dropZone.classList.remove('dragover');
-            if (e.dataTransfer.files.length) {
-                processFiles(e.dataTransfer.files);
-            }
+            if (e.dataTransfer.files.length) processFiles(e.dataTransfer.files);
         });
         fileInput.addEventListener('change', (e) => {
             if (e.target.files.length) {
