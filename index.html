@@ -1,1085 +1,499 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BarcodeVault — Bulk Barcode Extractor</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
-  <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.20.0/umd/index.min.js"></script>
-  <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
-  <style>
-    :root {
-      --bg:        #0D0F12;
-      --surface:   #141720;
-      --card:      #1C2030;
-      --border:    #2A3045;
-      --accent:    #00E5A0;
-      --accent2:   #005C40;
-      --text:      #E8ECF4;
-      --muted:     #7A859E;
-      --danger:    #FF4D6A;
-      --mono:      'IBM Plex Mono', monospace;
-      --sans:      'Inter', sans-serif;
-      --radius:    8px;
-      --transition: 160ms ease;
-    }
-
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      font-family: var(--sans);
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      line-height: 1.6;
-    }
-
-    /* ── Header ── */
-    header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 18px 32px;
-      border-bottom: 1px solid var(--border);
-      background: var(--surface);
-      position: sticky;
-      top: 0;
-      z-index: 100;
-    }
-
-    .logo {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-family: var(--mono);
-      font-size: 1.1rem;
-      font-weight: 600;
-      letter-spacing: -0.02em;
-      color: var(--text);
-      text-decoration: none;
-    }
-
-    .logo-icon {
-      width: 32px;
-      height: 32px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: var(--accent);
-      border-radius: 6px;
-    }
-
-    .logo-icon svg { display: block; }
-
-    .header-badge {
-      font-family: var(--mono);
-      font-size: 0.7rem;
-      padding: 3px 8px;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      color: var(--muted);
-      letter-spacing: 0.08em;
-    }
-
-    /* ── Layout ── */
-    main {
-      max-width: 1100px;
-      margin: 0 auto;
-      padding: 40px 24px 80px;
-    }
-
-    .hero {
-      text-align: center;
-      margin-bottom: 48px;
-    }
-
-    .hero h1 {
-      font-family: var(--mono);
-      font-size: clamp(1.8rem, 4vw, 2.8rem);
-      font-weight: 600;
-      letter-spacing: -0.03em;
-      line-height: 1.2;
-      margin-bottom: 12px;
-    }
-
-    .hero h1 span { color: var(--accent); }
-
-    .hero p {
-      color: var(--muted);
-      font-size: 1rem;
-      max-width: 480px;
-      margin: 0 auto;
-    }
-
-    /* ── Upload Zone ── */
-    .upload-zone {
-      border: 2px dashed var(--border);
-      border-radius: 12px;
-      padding: 56px 24px;
-      text-align: center;
-      cursor: pointer;
-      transition: border-color var(--transition), background var(--transition);
-      position: relative;
-      background: var(--card);
-      margin-bottom: 28px;
-    }
-
-    .upload-zone:hover,
-    .upload-zone.drag-over {
-      border-color: var(--accent);
-      background: rgba(0,229,160,0.04);
-    }
-
-    .upload-zone input[type="file"] {
-      position: absolute;
-      inset: 0;
-      opacity: 0;
-      cursor: pointer;
-      width: 100%;
-      height: 100%;
-    }
-
-    .upload-icon {
-      width: 56px;
-      height: 56px;
-      margin: 0 auto 16px;
-      border-radius: 50%;
-      background: rgba(0,229,160,0.10);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .upload-zone h2 {
-      font-size: 1.05rem;
-      font-weight: 600;
-      margin-bottom: 6px;
-    }
-
-    .upload-zone p {
-      color: var(--muted);
-      font-size: 0.875rem;
-    }
-
-    .upload-zone .file-types {
-      margin-top: 14px;
-      display: flex;
-      gap: 8px;
-      justify-content: center;
-      flex-wrap: wrap;
-    }
-
-    .file-types span {
-      font-family: var(--mono);
-      font-size: 0.72rem;
-      letter-spacing: 0.06em;
-      color: var(--accent);
-      background: rgba(0,229,160,0.08);
-      padding: 2px 8px;
-      border-radius: 4px;
-    }
-
-    /* ── Progress / Status ── */
-    #progress-area {
-      display: none;
-      margin-bottom: 24px;
-    }
-
-    .progress-bar-track {
-      height: 4px;
-      background: var(--border);
-      border-radius: 2px;
-      overflow: hidden;
-      margin-bottom: 10px;
-    }
-
-    .progress-bar-fill {
-      height: 100%;
-      background: var(--accent);
-      border-radius: 2px;
-      transition: width 200ms ease;
-      width: 0%;
-    }
-
-    #status-text {
-      font-family: var(--mono);
-      font-size: 0.8rem;
-      color: var(--muted);
-    }
-
-    /* ── Toolbar ── */
-    .toolbar {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 16px;
-    }
-
-    .toolbar-left, .toolbar-right {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-
-    .search-box {
-      position: relative;
-    }
-
-    .search-box svg {
-      position: absolute;
-      left: 10px;
-      top: 50%;
-      transform: translateY(-50%);
-      color: var(--muted);
-      pointer-events: none;
-    }
-
-    .search-box input {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      color: var(--text);
-      padding: 8px 12px 8px 34px;
-      font-family: var(--sans);
-      font-size: 0.875rem;
-      width: 220px;
-      outline: none;
-      transition: border-color var(--transition);
-    }
-
-    .search-box input::placeholder { color: var(--muted); }
-    .search-box input:focus { border-color: var(--accent); }
-
-    /* ── Buttons ── */
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 8px 14px;
-      border-radius: var(--radius);
-      font-family: var(--sans);
-      font-size: 0.875rem;
-      font-weight: 500;
-      cursor: pointer;
-      border: none;
-      transition: background var(--transition), color var(--transition), opacity var(--transition);
-    }
-
-    .btn:disabled { opacity: 0.35; cursor: not-allowed; }
-
-    .btn-primary {
-      background: var(--accent);
-      color: #000;
-    }
-    .btn-primary:hover:not(:disabled) { background: #00ffb3; }
-
-    .btn-outline {
-      background: transparent;
-      border: 1px solid var(--border);
-      color: var(--text);
-    }
-    .btn-outline:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-
-    .btn-danger {
-      background: transparent;
-      border: 1px solid var(--danger);
-      color: var(--danger);
-    }
-    .btn-danger:hover:not(:disabled) { background: rgba(255,77,106,0.1); }
-
-    /* ── Filter bar ── */
-    .filter-bar {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      margin-bottom: 16px;
-    }
-
-    .filter-btn {
-      padding: 4px 12px;
-      border-radius: 20px;
-      font-size: 0.8rem;
-      border: 1px solid var(--border);
-      background: transparent;
-      color: var(--muted);
-      cursor: pointer;
-      transition: all var(--transition);
-    }
-
-    .filter-btn.active, .filter-btn:hover {
-      border-color: var(--accent);
-      color: var(--accent);
-    }
-
-    /* ── Table ── */
-    .table-wrapper {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      overflow: hidden;
-      background: var(--card);
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.875rem;
-    }
-
-    thead {
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-    }
-
-    th {
-      padding: 12px 16px;
-      text-align: left;
-      font-weight: 600;
-      font-size: 0.78rem;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-      color: var(--muted);
-      white-space: nowrap;
-      cursor: pointer;
-      user-select: none;
-      position: relative;
-    }
-
-    th:hover { color: var(--text); }
-
-    th .sort-icon {
-      display: inline-block;
-      margin-left: 5px;
-      opacity: 0.4;
-      font-size: 0.7rem;
-    }
-
-    th.sort-asc .sort-icon::after { content: '▲'; opacity: 1; color: var(--accent); }
-    th.sort-desc .sort-icon::after { content: '▼'; opacity: 1; color: var(--accent); }
-    th:not(.sort-asc):not(.sort-desc) .sort-icon::after { content: '⇅'; }
-
-    tbody tr {
-      border-bottom: 1px solid var(--border);
-      transition: background var(--transition);
-    }
-
-    tbody tr:last-child { border-bottom: none; }
-    tbody tr:hover { background: rgba(255,255,255,0.03); }
-
-    td {
-      padding: 11px 16px;
-      vertical-align: middle;
-    }
-
-    td.barcode-value {
-      font-family: var(--mono);
-      font-size: 0.85rem;
-      color: var(--accent);
-      letter-spacing: 0.04em;
-    }
-
-    .format-badge {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 4px;
-      font-family: var(--mono);
-      font-size: 0.72rem;
-      letter-spacing: 0.04em;
-      background: rgba(0,229,160,0.08);
-      color: var(--accent);
-    }
-
-    .orientation-badge {
-      display: inline-block;
-      padding: 2px 7px;
-      border-radius: 4px;
-      font-size: 0.72rem;
-      background: rgba(122,133,158,0.12);
-      color: var(--muted);
-    }
-
-    .thumb-cell img {
-      width: 48px;
-      height: 36px;
-      object-fit: cover;
-      border-radius: 4px;
-      border: 1px solid var(--border);
-    }
-
-    .copy-btn {
-      background: none;
-      border: none;
-      cursor: pointer;
-      color: var(--muted);
-      padding: 4px;
-      border-radius: 4px;
-      transition: color var(--transition);
-      vertical-align: middle;
-    }
-    .copy-btn:hover { color: var(--accent); }
-
-    /* ── Empty State ── */
-    #empty-state {
-      padding: 64px 24px;
-      text-align: center;
-    }
-
-    #empty-state svg { opacity: 0.18; margin-bottom: 16px; }
-    #empty-state p { color: var(--muted); font-size: 0.9rem; }
-    #empty-state strong { display: block; color: var(--text); font-size: 1rem; margin-bottom: 6px; }
-
-    /* ── Stats strip ── */
-    .stats-strip {
-      display: flex;
-      gap: 24px;
-      margin-bottom: 20px;
-      flex-wrap: wrap;
-    }
-
-    .stat {
-      display: flex;
-      flex-direction: column;
-    }
-
-    .stat-value {
-      font-family: var(--mono);
-      font-size: 1.5rem;
-      font-weight: 600;
-      color: var(--accent);
-      line-height: 1;
-    }
-
-    .stat-label {
-      font-size: 0.75rem;
-      color: var(--muted);
-      margin-top: 2px;
-    }
-
-    /* ── Toast ── */
-    #toast {
-      position: fixed;
-      bottom: 28px;
-      right: 28px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-left: 3px solid var(--accent);
-      color: var(--text);
-      padding: 12px 18px;
-      border-radius: var(--radius);
-      font-size: 0.875rem;
-      font-family: var(--mono);
-      opacity: 0;
-      transform: translateY(12px);
-      transition: opacity 260ms ease, transform 260ms ease;
-      z-index: 999;
-      pointer-events: none;
-    }
-
-    #toast.show {
-      opacity: 1;
-      transform: translateY(0);
-    }
-
-    /* ── Pagination ── */
-    .pagination {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-top: 16px;
-      justify-content: center;
-    }
-
-    .page-btn {
-      width: 32px;
-      height: 32px;
-      border-radius: 6px;
-      border: 1px solid var(--border);
-      background: var(--card);
-      color: var(--text);
-      font-size: 0.8rem;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all var(--transition);
-    }
-
-    .page-btn:hover, .page-btn.active {
-      border-color: var(--accent);
-      color: var(--accent);
-    }
-
-    .page-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-
-    /* ── Responsive ── */
-    @media (max-width: 680px) {
-      header { padding: 14px 16px; }
-      main { padding: 24px 14px 60px; }
-      .search-box input { width: 160px; }
-      th, td { padding: 10px 10px; }
-      .stats-strip { gap: 16px; }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after { transition: none !important; }
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BarcodeVault Pro</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { color: #333; margin-bottom: 20px; }
+        .upload-zone { border: 2px dashed #ccc; border-radius: 8px; padding: 40px; text-align: center; background: white; cursor: pointer; transition: all 0.3s; }
+        .upload-zone:hover, .upload-zone.dragover { border-color: #4CAF50; background: #f9fff9; }
+        .upload-zone input { display: none; }
+        .controls { margin: 20px 0; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+        .controls input[type="text"] { flex: 1; min-width: 200px; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; }
+        .controls select { padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; }
+        .controls button { padding: 8px 16px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .controls button:hover { background: #45a049; }
+        .controls button.export { background: #2196F3; }
+        .controls button.export:hover { background: #1976D2; }
+        .controls button.import { background: #FF9800; }
+        .controls button.import:hover { background: #F57C00; }
+        .sensitivity { display: flex; align-items: center; gap: 10px; }
+        .sensitivity input[type="range"] { width: 150px; }
+        table { width: 100%; border-collapse: collapse; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background: #f8f8f8; cursor: pointer; user-select: none; }
+        th:hover { background: #eee; }
+        tr:hover { background: #f5f5f5; }
+        .copy-btn { cursor: pointer; color: #2196F3; }
+        .copy-btn:hover { color: #1976D2; }
+        .status { margin: 10px 0; padding: 10px; border-radius: 4px; }
+        .status.processing { background: #FFF3CD; color: #856404; }
+        .status.done { background: #D4EDDA; color: #155724; }
+        .status.error { background: #F8D7DA; color: #721C24; }
+        .progress-bar { width: 100%; height: 4px; background: #e0e0e0; border-radius: 2px; margin: 10px 0; display: none; }
+        .progress-bar .fill { height: 100%; background: #4CAF50; border-radius: 2px; transition: width 0.3s; }
+        @media (max-width: 600px) { .controls { flex-direction: column; } }
+    </style>
 </head>
 <body>
+    <div class="container">
+        <h1>📷 BarcodeVault Pro</h1>
+        
+        <div class="upload-zone" id="dropZone">
+            <p>Drop images here or click to upload</p>
+            <p style="font-size: 12px; color: #888;">Supports: JPG, PNG, WebP, BMP, GIF</p>
+            <input type="file" id="fileInput" multiple accept="image/*">
+        </div>
 
-<header>
-  <a class="logo" href="#">
-    <div class="logo-icon">
-      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <rect x="1" y="3" width="2" height="12" fill="#000"/>
-        <rect x="4" y="3" width="1" height="12" fill="#000"/>
-        <rect x="6" y="3" width="3" height="12" fill="#000"/>
-        <rect x="10" y="3" width="1" height="12" fill="#000"/>
-        <rect x="12" y="3" width="2" height="12" fill="#000"/>
-        <rect x="15" y="3" width="2" height="12" fill="#000"/>
-      </svg>
+        <div class="progress-bar" id="progressBar">
+            <div class="fill" id="progressFill"></div>
+        </div>
+
+        <div id="status" class="status" style="display: none;"></div>
+
+        <div class="controls">
+            <input type="text" id="searchInput" placeholder="Search barcodes...">
+            <select id="formatFilter">
+                <option value="">All formats</option>
+                <option value="QR_CODE">QR Code</option>
+                <option value="CODE_128">Code 128</option>
+                <option value="EAN_13">EAN-13</option>
+                <option value="EAN_8">EAN-8</option>
+                <option value="UPC_A">UPC-A</option>
+                <option value="UPC_E">UPC-E</option>
+                <option value="CODE_39">Code 39</option>
+                <option value="PDF_417">PDF417</option>
+                <option value="AZTEC">Aztec</option>
+                <option value="DATA_MATRIX">Data Matrix</option>
+                <option value="ITF">ITF</option>
+                <option value="CODABAR">Codabar</option>
+            </select>
+            <div class="sensitivity">
+                <label>Detection sensitivity:</label>
+                <input type="range" id="sensitivitySlider" min="1" max="5" value="3">
+                <span id="sensitivityValue">3</span>
+            </div>
+            <button onclick="exportExcel()" class="export">📊 Export Excel</button>
+            <button onclick="exportCSV()" class="export">📄 Export CSV</button>
+            <button onclick="document.getElementById('importInput').click()" class="import">📥 Import CSV</button>
+            <input type="file" id="importInput" accept=".csv" style="display: none;" onchange="importCSV(event)">
+            <button onclick="clearAll()">🗑️ Clear All</button>
+        </div>
+
+        <table id="resultsTable">
+            <thead>
+                <tr>
+                    <th onclick="sortTable(0)">#</th>
+                    <th onclick="sortTable(1)">Barcode Value</th>
+                    <th onclick="sortTable(2)">Format</th>
+                    <th onclick="sortTable(3)">Image</th>
+                    <th onclick="sortTable(4)">Timestamp</th>
+                    <th>Copy</th>
+                </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+        </table>
     </div>
-    BarcodeVault
-  </a>
-  <span class="header-badge">MULTI-FORMAT · BULK SCAN</span>
-</header>
 
-<main>
-  <div class="hero">
-    <h1>Extract barcodes<br /><span>from any image</span></h1>
-    <p>Upload one image or hundreds. We detect barcodes in any orientation and build a searchable, exportable table instantly.</p>
-  </div>
+    <script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script>
+        // ===== STATE =====
+        let barcodeData = [];
+        let sortColumn = 0;
+        let sortAsc = true;
+        let isProcessing = false;
 
-  <!-- Upload Zone -->
-  <div class="upload-zone" id="uploadZone">
-    <input type="file" id="fileInput" accept="image/*" multiple />
-    <div class="upload-icon">
-      <svg width="26" height="26" fill="none" stroke="var(--accent)" stroke-width="2" viewBox="0 0 24 24">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-        <polyline points="17 8 12 3 7 8"/>
-        <line x1="12" y1="3" x2="12" y2="15"/>
-      </svg>
-    </div>
-    <h2>Drop images here or click to browse</h2>
-    <p>Supports bulk upload — all barcodes are extracted automatically</p>
-    <div class="file-types">
-      <span>JPG</span><span>PNG</span><span>WEBP</span><span>GIF</span><span>BMP</span>
-    </div>
-  </div>
+        // ===== DOM REFS =====
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const tableBody = document.getElementById('tableBody');
+        const searchInput = document.getElementById('searchInput');
+        const formatFilter = document.getElementById('formatFilter');
+        const statusDiv = document.getElementById('status');
+        const progressBar = document.getElementById('progressBar');
+        const progressFill = document.getElementById('progressFill');
+        const sensitivitySlider = document.getElementById('sensitivitySlider');
+        const sensitivityValue = document.getElementById('sensitivityValue');
 
-  <!-- Progress -->
-  <div id="progress-area">
-    <div class="progress-bar-track">
-      <div class="progress-bar-fill" id="progressFill"></div>
-    </div>
-    <span id="status-text">Scanning…</span>
-  </div>
+        // ===== ZXING SETUP =====
+        const codeReader = new ZXing.BrowserMultiFormatReader();
+        const hints = new Map();
+        hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+        hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+            ZXing.BarcodeFormat.QR_CODE,
+            ZXing.BarcodeFormat.CODE_128,
+            ZXing.BarcodeFormat.EAN_13,
+            ZXing.BarcodeFormat.EAN_8,
+            ZXing.BarcodeFormat.UPC_A,
+            ZXing.BarcodeFormat.UPC_E,
+            ZXing.BarcodeFormat.CODE_39,
+            ZXing.BarcodeFormat.PDF_417,
+            ZXing.BarcodeFormat.AZTEC,
+            ZXing.BarcodeFormat.DATA_MATRIX,
+            ZXing.BarcodeFormat.ITF,
+            ZXing.BarcodeFormat.CODABAR
+        ]);
 
-  <!-- Stats -->
-  <div class="stats-strip" id="statsStrip" style="display:none">
-    <div class="stat">
-      <span class="stat-value" id="statTotal">0</span>
-      <span class="stat-label">Barcodes found</span>
-    </div>
-    <div class="stat">
-      <span class="stat-value" id="statImages">0</span>
-      <span class="stat-label">Images scanned</span>
-    </div>
-    <div class="stat">
-      <span class="stat-value" id="statFormats">0</span>
-      <span class="stat-label">Unique formats</span>
-    </div>
-  </div>
-
-  <!-- Toolbar -->
-  <div class="toolbar" id="toolbar" style="display:none">
-    <div class="toolbar-left">
-      <div class="search-box">
-        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-        </svg>
-        <input type="text" id="searchInput" placeholder="Search barcodes…" />
-      </div>
-    </div>
-    <div class="toolbar-right">
-      <button class="btn btn-outline" onclick="importCSV()" title="Import barcodes from CSV">
-        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-          <polyline points="7 10 12 15 17 10"/>
-          <line x1="12" y1="15" x2="12" y2="3"/>
-        </svg>
-        Import CSV
-      </button>
-      <button class="btn btn-outline" onclick="exportCSV()" id="exportCsvBtn" disabled>
-        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-          <polyline points="14 2 14 8 20 8"/>
-          <line x1="16" y1="13" x2="8" y2="13"/>
-          <line x1="16" y1="17" x2="8" y2="17"/>
-        </svg>
-        Export CSV
-      </button>
-      <button class="btn btn-primary" onclick="exportExcel()" id="exportXlsBtn" disabled>
-        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-          <polyline points="14 2 14 8 20 8"/>
-          <polyline points="8 13 10.5 17 13 13"/>
-        </svg>
-        Export Excel
-      </button>
-      <button class="btn btn-danger" onclick="clearAll()" id="clearBtn" disabled>
-        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <polyline points="3 6 5 6 21 6"/>
-          <path d="M19 6l-1 14H6L5 6"/>
-          <path d="M10 11v6M14 11v6"/>
-        </svg>
-        Clear
-      </button>
-    </div>
-  </div>
-
-  <!-- Format filter -->
-  <div class="filter-bar" id="filterBar" style="display:none">
-    <button class="filter-btn active" data-filter="all" onclick="setFilter('all', this)">All formats</button>
-  </div>
-
-  <!-- Table -->
-  <div class="table-wrapper">
-    <div id="empty-state">
-      <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <rect x="6" y="14" width="6" height="36" fill="var(--text)"/>
-        <rect x="14" y="14" width="3" height="36" fill="var(--text)"/>
-        <rect x="19" y="14" width="8" height="36" fill="var(--text)"/>
-        <rect x="29" y="14" width="3" height="36" fill="var(--text)"/>
-        <rect x="34" y="14" width="6" height="36" fill="var(--text)"/>
-        <rect x="42" y="14" width="3" height="36" fill="var(--text)"/>
-        <rect x="47" y="14" width="4" height="36" fill="var(--text)"/>
-        <rect x="53" y="14" width="5" height="36" fill="var(--text)"/>
-      </svg>
-      <strong>No barcodes yet</strong>
-      <p>Upload images above to start extracting barcodes</p>
-    </div>
-    <table id="barcodeTable" style="display:none">
-      <thead>
-        <tr>
-          <th style="width:60px">#</th>
-          <th class="thumb-col" style="width:70px">Preview</th>
-          <th data-col="value" onclick="sortBy('value', this)">Barcode Value <span class="sort-icon"></span></th>
-          <th data-col="format" onclick="sortBy('format', this)">Format <span class="sort-icon"></span></th>
-          <th data-col="filename" onclick="sortBy('filename', this)">Source File <span class="sort-icon"></span></th>
-          <th data-col="timestamp" onclick="sortBy('timestamp', this)">Scanned At <span class="sort-icon"></span></th>
-          <th style="width:50px"></th>
-        </tr>
-      </thead>
-      <tbody id="tableBody"></tbody>
-    </table>
-  </div>
-  <div class="pagination" id="pagination"></div>
-</main>
-
-<input type="file" id="csvImportInput" accept=".csv" style="display:none" />
-<div id="toast"></div>
-
-<script>
-// ── State ──────────────────────────────────────────────────────────────────
-let allBarcodes = [];       // { id, value, format, filename, thumb, timestamp }
-let filtered    = [];
-let sortCol     = 'timestamp';
-let sortDir     = 'desc';
-let filterFmt   = 'all';
-let searchQ     = '';
-let page        = 1;
-const PAGE_SIZE = 20;
-
-// ── ZXing multi-format reader (with rotation tries) ────────────────────────
-const hints = new Map();
-hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-  ZXing.BarcodeFormat.QR_CODE,
-  ZXing.BarcodeFormat.DATA_MATRIX,
-  ZXing.BarcodeFormat.CODE_128,
-  ZXing.BarcodeFormat.CODE_39,
-  ZXing.BarcodeFormat.EAN_13,
-  ZXing.BarcodeFormat.EAN_8,
-  ZXing.BarcodeFormat.UPC_A,
-  ZXing.BarcodeFormat.UPC_E,
-  ZXing.BarcodeFormat.PDF_417,
-  ZXing.BarcodeFormat.AZTEC,
-  ZXing.BarcodeFormat.ITF,
-  ZXing.BarcodeFormat.CODABAR,
-]);
-const reader = new ZXing.MultiFormatReader();
-reader.setHints(hints);
-
-// ── Drag & Drop ───────────────────────────────────────────────────────────
-const zone = document.getElementById('uploadZone');
-zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
-zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
-zone.addEventListener('drop', e => {
-  e.preventDefault();
-  zone.classList.remove('drag-over');
-  handleFiles([...e.dataTransfer.files].filter(f => f.type.startsWith('image/')));
-});
-document.getElementById('fileInput').addEventListener('change', e => {
-  handleFiles([...e.target.files]);
-  e.target.value = '';
-});
-
-// ── Core scan ─────────────────────────────────────────────────────────────
-async function handleFiles(files) {
-  if (!files.length) return;
-  const prog = document.getElementById('progress-area');
-  const fill = document.getElementById('progressFill');
-  const status = document.getElementById('status-text');
-  prog.style.display = 'block';
-
-  let processed = 0;
-  let found = 0;
-
-  for (const file of files) {
-    status.textContent = `Scanning ${file.name} (${processed + 1} / ${files.length})…`;
-    fill.style.width = ((processed / files.length) * 100) + '%';
-
-    try {
-      const results = await scanFile(file);
-      for (const r of results) {
-        allBarcodes.unshift({
-          id: crypto.randomUUID(),
-          value: r.value,
-          format: r.format,
-          filename: file.name,
-          thumb: r.thumb,
-          timestamp: new Date().toLocaleString(),
+        // ===== SENSITIVITY =====
+        sensitivitySlider.addEventListener('input', () => {
+            sensitivityValue.textContent = sensitivitySlider.value;
         });
-        found++;
-      }
-      if (!results.length) {
-        allBarcodes.unshift({
-          id: crypto.randomUUID(),
-          value: '— not detected —',
-          format: 'N/A',
-          filename: file.name,
-          thumb: r?.thumb || '',
-          timestamp: new Date().toLocaleString(),
-        });
-      }
-    } catch(e) { /* skip unreadable */ }
 
-    processed++;
-  }
+        // ===== IMAGE PREPROCESSING =====
+        function preprocessImage(canvas, sensitivity) {
+            const ctx = canvas.getContext('2d');
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = imageData.data;
+            
+            // Contrast adjustment based on sensitivity
+            const factor = 1.0 + (sensitivity - 1) * 0.3;
+            for (let i = 0; i < data.length; i += 4) {
+                data[i] = Math.min(255, Math.max(0, 128 + factor * (data[i] - 128)));
+                data[i+1] = Math.min(255, Math.max(0, 128 + factor * (data[i+1] - 128)));
+                data[i+2] = Math.min(255, Math.max(0, 128 + factor * (data[i+2] - 128)));
+            }
+            
+            // Simple sharpening
+            if (sensitivity >= 3) {
+                const width = canvas.width;
+                const height = canvas.height;
+                const output = new Uint8ClampedArray(data);
+                
+                for (let y = 1; y < height - 1; y++) {
+                    for (let x = 1; x < width - 1; x++) {
+                        for (let c = 0; c < 3; c++) {
+                            const idx = (y * width + x) * 4 + c;
+                            const sum = -data[((y-1)*width + (x-1))*4 + c] - data[((y-1)*width + x)*4 + c] - data[((y-1)*width + (x+1))*4 + c]
+                                      - data[(y*width + (x-1))*4 + c] + 9*data[idx] - data[(y*width + (x+1))*4 + c]
+                                      - data[((y+1)*width + (x-1))*4 + c] - data[((y+1)*width + x)*4 + c] - data[((y+1)*width + (x+1))*4 + c];
+                            output[idx] = Math.min(255, Math.max(0, sum));
+                        }
+                    }
+                }
+                ctx.putImageData(new ImageData(output, width, height), 0, 0);
+            } else {
+                ctx.putImageData(imageData, 0, 0);
+            }
+        }
 
-  fill.style.width = '100%';
-  status.textContent = `Done — ${found} barcode${found !== 1 ? 's' : ''} extracted from ${files.length} image${files.length !== 1 ? 's' : ''}.`;
-  setTimeout(() => { prog.style.display = 'none'; }, 3000);
+        // ===== ROTATE CANVAS =====
+        function rotateCanvas(canvas, angle) {
+            const rotated = document.createElement('canvas');
+            const ctx = rotated.getContext('2d');
+            
+            if (angle === 90 || angle === 270) {
+                rotated.width = canvas.height;
+                rotated.height = canvas.width;
+            } else {
+                rotated.width = canvas.width;
+                rotated.height = canvas.height;
+            }
+            
+            ctx.translate(rotated.width / 2, rotated.height / 2);
+            ctx.rotate(angle * Math.PI / 180);
+            ctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+            
+            return rotated;
+        }
 
-  refreshUI();
-  toast(`${found} barcode${found !== 1 ? 's' : ''} extracted`);
-}
+        // ===== DECODE IMAGE =====
+        async function decodeImage(canvas) {
+            const sensitivity = parseInt(sensitivitySlider.value);
+            const angles = [0, 90, 180, 270];
+            
+            // Try original and preprocessed versions
+            const versions = [canvas];
+            
+            // Add preprocessed version
+            const processedCanvas = document.createElement('canvas');
+            processedCanvas.width = canvas.width;
+            processedCanvas.height = canvas.height;
+            const pCtx = processedCanvas.getContext('2d');
+            pCtx.drawImage(canvas, 0, 0);
+            preprocessImage(processedCanvas, sensitivity);
+            versions.push(processedCanvas);
+            
+            // Add scaled versions for large images
+            if (canvas.width > 2000 || canvas.height > 2000) {
+                const scale = 0.5;
+                const scaledCanvas = document.createElement('canvas');
+                scaledCanvas.width = canvas.width * scale;
+                scaledCanvas.height = canvas.height * scale;
+                const sCtx = scaledCanvas.getContext('2d');
+                sCtx.drawImage(canvas, 0, 0, scaledCanvas.width, scaledCanvas.height);
+                versions.push(scaledCanvas);
+            }
+            
+            for (const version of versions) {
+                for (const angle of angles) {
+                    try {
+                        const rotated = angle === 0 ? version : rotateCanvas(version, angle);
+                        const result = await codeReader.decodeFromCanvas(rotated, hints);
+                        if (result && result.text) {
+                            return {
+                                value: result.text,
+                                format: result.format ? result.format.name || result.format : 'Unknown'
+                            };
+                        }
+                    } catch (e) {
+                        // Continue trying
+                    }
+                }
+            }
+            return null;
+        }
 
-async function scanFile(file) {
-  return new Promise((resolve) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      const results = [];
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
+        // ===== PROCESS FILES =====
+        async function processFiles(files) {
+            if (isProcessing) return;
+            isProcessing = true;
+            
+            const validFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
+            if (validFiles.length === 0) {
+                showStatus('No valid image files found.', 'error');
+                isProcessing = false;
+                return;
+            }
+            
+            showStatus(`Processing ${validFiles.length} images...`, 'processing');
+            progressBar.style.display = 'block';
+            
+            let processed = 0;
+            let found = 0;
+            
+            for (const file of validFiles) {
+                try {
+                    const image = await loadImage(file);
+                    const canvas = document.createElement('canvas');
+                    canvas.width = image.width;
+                    canvas.height = image.height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(image, 0, 0);
+                    
+                    const result = await decodeImage(canvas);
+                    
+                    if (result) {
+                        barcodeData.push({
+                            id: barcodeData.length + 1,
+                            value: result.value,
+                            format: result.format,
+                            image: file.name,
+                            timestamp: new Date().toISOString()
+                        });
+                        found++;
+                    }
+                    
+                    processed++;
+                    progressFill.style.width = `${(processed / validFiles.length) * 100}%`;
+                    
+                } catch (e) {
+                    console.error('Error processing file:', file.name, e);
+                }
+            }
+            
+            progressBar.style.display = 'none';
+            showStatus(`Processed ${processed} images. Found ${found} barcodes.`, 'done');
+            renderTable();
+            isProcessing = false;
+        }
 
-      // Try 4 rotations: 0°, 90°, 180°, 270°
-      const rotations = [0, 90, 180, 270];
-      const seen = new Set();
-
-      for (const deg of rotations) {
-        const rad = deg * Math.PI / 180;
-        const sw = (deg === 90 || deg === 270) ? img.height : img.width;
-        const sh = (deg === 90 || deg === 270) ? img.width  : img.height;
-        canvas.width  = sw;
-        canvas.height = sh;
-        ctx.save();
-        ctx.translate(sw / 2, sh / 2);
-        ctx.rotate(rad);
-        ctx.drawImage(img, -img.width / 2, -img.height / 2);
-        ctx.restore();
-
-        try {
-          const lum = ZXing.HTMLCanvasElementLuminanceSource;
-          const src = new lum(canvas);
-          const bmp = new ZXing.HybridBinarizer(src);
-          const binary = new ZXing.BinaryBitmap(bmp);
-          const result = reader.decode(binary);
-          const key = result.getText();
-          if (!seen.has(key)) {
-            seen.add(key);
-            results.push({
-              value: key,
-              format: result.getBarcodeFormat().toString(),
-              thumb: canvas.toDataURL('image/jpeg', 0.5),
+        // ===== LOAD IMAGE =====
+        function loadImage(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => resolve(img);
+                    img.onerror = reject;
+                    img.src = e.target.result;
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
             });
-          }
-        } catch (_) {}
-      }
+        }
 
-      // Also try with a scaled-up version for small barcodes
-      if (results.length === 0) {
-        const scale = 2;
-        canvas.width  = img.width * scale;
-        canvas.height = img.height * scale;
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        try {
-          const lum = ZXing.HTMLCanvasElementLuminanceSource;
-          const src = new lum(canvas);
-          const bmp = new ZXing.HybridBinarizer(src);
-          const binary = new ZXing.BinaryBitmap(bmp);
-          const result = reader.decode(binary);
-          const key = result.getText();
-          if (!seen.has(key)) {
-            seen.add(key);
-            results.push({
-              value: key,
-              format: result.getBarcodeFormat().toString(),
-              thumb: canvas.toDataURL('image/jpeg', 0.5),
+        // ===== RENDER TABLE =====
+        function renderTable() {
+            const search = searchInput.value.toLowerCase();
+            const format = formatFilter.value;
+            
+            let filtered = barcodeData.filter(item => {
+                const matchesSearch = item.value.toLowerCase().includes(search) || 
+                                     item.image.toLowerCase().includes(search);
+                const matchesFormat = !format || item.format === format;
+                return matchesSearch && matchesFormat;
             });
-          }
-        } catch (_) {}
-      }
+            
+            // Sort
+            filtered.sort((a, b) => {
+                let valA, valB;
+                switch(sortColumn) {
+                    case 0: valA = a.id; valB = b.id; break;
+                    case 1: valA = a.value; valB = b.value; break;
+                    case 2: valA = a.format; valB = b.format; break;
+                    case 3: valA = a.image; valB = b.image; break;
+                    case 4: valA = a.timestamp; valB = b.timestamp; break;
+                    default: valA = a.id; valB = b.id;
+                }
+                
+                if (typeof valA === 'string') {
+                    return sortAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                }
+                return sortAsc ? valA - valB : valB - valA;
+            });
+            
+            tableBody.innerHTML = filtered.map(item => `
+                <tr>
+                    <td>${item.id}</td>
+                    <td>${item.value}</td>
+                    <td>${item.format}</td>
+                    <td>${item.image}</td>
+                    <td>${new Date(item.timestamp).toLocaleString()}</td>
+                    <td><span class="copy-btn" onclick="copyValue('${item.value.replace(/'/g, "\'")}')">📋</span></td>
+                </tr>
+            `).join('');
+        }
 
-      URL.revokeObjectURL(url);
+        // ===== SORT =====
+        function sortTable(col) {
+            if (sortColumn === col) {
+                sortAsc = !sortAsc;
+            } else {
+                sortColumn = col;
+                sortAsc = true;
+            }
+            renderTable();
+        }
 
-      // Thumbnail from original
-      canvas.width = img.width; canvas.height = img.height;
-      ctx.drawImage(img, 0, 0);
-      const thumb = canvas.toDataURL('image/jpeg', 0.4);
-      if (results.length === 0) {
-        resolve([{ value: '— not detected —', format: 'N/A', thumb }]);
-      } else {
-        results.forEach(r => { if (!r.thumb) r.thumb = thumb; });
-        resolve(results);
-      }
-    };
-    img.onerror = () => resolve([]);
-    img.src = url;
-  });
-}
+        // ===== COPY =====
+        function copyValue(value) {
+            navigator.clipboard.writeText(value).then(() => {
+                showStatus('Copied to clipboard!', 'done');
+            }).catch(() => {
+                // Fallback
+                const textarea = document.createElement('textarea');
+                textarea.value = value;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                showStatus('Copied to clipboard!', 'done');
+            });
+        }
 
-// ── UI Refresh ────────────────────────────────────────────────────────────
-function refreshUI() {
-  // update format filter buttons
-  const formats = [...new Set(allBarcodes.map(b => b.format).filter(f => f !== 'N/A'))];
-  const filterBar = document.getElementById('filterBar');
-  filterBar.innerHTML = `<button class="filter-btn ${filterFmt === 'all' ? 'active' : ''}" data-filter="all" onclick="setFilter('all', this)">All formats</button>`;
-  formats.forEach(f => {
-    filterBar.innerHTML += `<button class="filter-btn ${filterFmt === f ? 'active' : ''}" data-filter="${f}" onclick="setFilter('${f}', this)">${f}</button>`;
-  });
+        // ===== EXPORT =====
+        function exportExcel() {
+            if (barcodeData.length === 0) {
+                showStatus('No data to export.', 'error');
+                return;
+            }
+            
+            const ws = XLSX.utils.json_to_sheet(barcodeData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'Barcodes');
+            XLSX.writeFile(wb, `barcodes_${Date.now()}.xlsx`);
+            showStatus('Excel exported successfully!', 'done');
+        }
 
-  // apply filter + search
-  filtered = allBarcodes.filter(b => {
-    const matchFmt  = filterFmt === 'all' || b.format === filterFmt;
-    const matchSrch = !searchQ || b.value.toLowerCase().includes(searchQ) || b.filename.toLowerCase().includes(searchQ);
-    return matchFmt && matchSrch;
-  });
+        function exportCSV() {
+            if (barcodeData.length === 0) {
+                showStatus('No data to export.', 'error');
+                return;
+            }
+            
+            const ws = XLSX.utils.json_to_sheet(barcodeData);
+            const csv = XLSX.utils.sheet_to_csv(ws);
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `barcodes_${Date.now()}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+            showStatus('CSV exported successfully!', 'done');
+        }
 
-  // sort
-  filtered.sort((a, b) => {
-    let va = a[sortCol] || '', vb = b[sortCol] || '';
-    if (va < vb) return sortDir === 'asc' ? -1 : 1;
-    if (va > vb) return sortDir === 'asc' ?  1 : -1;
-    return 0;
-  });
+        // ===== IMPORT =====
+        function importCSV(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const data = XLSX.utils.sheet_to_json(XLSX.read(e.target.result, {type: 'string'}).Sheets.Sheet1);
+                    data.forEach(item => {
+                        barcodeData.push({
+                            id: barcodeData.length + 1,
+                            value: item.value || item.Barcode || '',
+                            format: item.format || item.Format || 'Unknown',
+                            image: item.image || item.Image || 'Imported',
+                            timestamp: item.timestamp || item.Timestamp || new Date().toISOString()
+                        });
+                    });
+                    renderTable();
+                    showStatus(`Imported ${data.length} records.`, 'done');
+                } catch (err) {
+                    showStatus('Error importing CSV.', 'error');
+                }
+            };
+            reader.readAsText(file);
+            event.target.value = '';
+        }
 
-  // stats
-  const totalBarcodes = allBarcodes.filter(b => b.value !== '— not detected —').length;
-  const totalImages   = [...new Set(allBarcodes.map(b => b.filename))].length;
-  const totalFormats  = [...new Set(allBarcodes.map(b => b.format).filter(f => f !== 'N/A'))].length;
-  document.getElementById('statTotal').textContent   = totalBarcodes;
-  document.getElementById('statImages').textContent  = totalImages;
-  document.getElementById('statFormats').textContent = totalFormats;
+        // ===== CLEAR =====
+        function clearAll() {
+            if (barcodeData.length === 0) return;
+            if (confirm('Clear all barcode data?')) {
+                barcodeData = [];
+                renderTable();
+                showStatus('All data cleared.', 'done');
+            }
+        }
 
-  // visibility
-  const hasData = allBarcodes.length > 0;
-  document.getElementById('statsStrip').style.display = hasData ? 'flex' : 'none';
-  document.getElementById('toolbar').style.display    = hasData ? 'flex' : 'none';
-  document.getElementById('filterBar').style.display  = hasData ? 'flex' : 'none';
-  document.getElementById('exportCsvBtn').disabled    = !hasData;
-  document.getElementById('exportXlsBtn').disabled    = !hasData;
-  document.getElementById('clearBtn').disabled        = !hasData;
-  document.getElementById('empty-state').style.display = hasData ? 'none' : 'block';
-  document.getElementById('barcodeTable').style.display = hasData ? 'table' : 'none';
+        // ===== STATUS =====
+        function showStatus(message, type) {
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+            statusDiv.style.display = 'block';
+            setTimeout(() => {
+                statusDiv.style.display = 'none';
+            }, 5000);
+        }
 
-  renderPage();
-}
-
-function renderPage() {
-  const start = (page - 1) * PAGE_SIZE;
-  const slice = filtered.slice(start, start + PAGE_SIZE);
-  const body  = document.getElementById('tableBody');
-  body.innerHTML = slice.map((b, i) => `
-    <tr>
-      <td style="color:var(--muted);font-family:var(--mono);font-size:0.78rem">${start + i + 1}</td>
-      <td class="thumb-cell">${b.thumb ? `<img src="${b.thumb}" alt="" />` : ''}</td>
-      <td class="barcode-value">${escHtml(b.value)}</td>
-      <td><span class="format-badge">${escHtml(b.format)}</span></td>
-      <td style="color:var(--muted);font-size:0.82rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(b.filename)}">${escHtml(b.filename)}</td>
-      <td style="color:var(--muted);font-size:0.8rem;white-space:nowrap">${escHtml(b.timestamp)}</td>
-      <td>
-        <button class="copy-btn" onclick="copyValue('${escHtml(b.value.replace(/'/g, "\\'"))}')" title="Copy barcode value">
-          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-          </svg>
-        </button>
-      </td>
-    </tr>
-  `).join('');
-
-  renderPagination();
-}
-
-function renderPagination() {
-  const total = Math.ceil(filtered.length / PAGE_SIZE);
-  const pg = document.getElementById('pagination');
-  if (total <= 1) { pg.innerHTML = ''; return; }
-
-  let html = `<button class="page-btn" onclick="goPage(${page - 1})" ${page === 1 ? 'disabled' : ''}>‹</button>`;
-  for (let i = 1; i <= total; i++) {
-    if (i === 1 || i === total || Math.abs(i - page) <= 1) {
-      html += `<button class="page-btn ${i === page ? 'active' : ''}" onclick="goPage(${i})">${i}</button>`;
-    } else if (Math.abs(i - page) === 2) {
-      html += `<span style="color:var(--muted);padding:0 4px">…</span>`;
-    }
-  }
-  html += `<button class="page-btn" onclick="goPage(${page + 1})" ${page === total ? 'disabled' : ''}>›</button>`;
-  pg.innerHTML = html;
-}
-
-function goPage(p) {
-  const total = Math.ceil(filtered.length / PAGE_SIZE);
-  if (p < 1 || p > total) return;
-  page = p;
-  renderPage();
-}
-
-// ── Sort & Filter ─────────────────────────────────────────────────────────
-function sortBy(col, th) {
-  if (sortCol === col) {
-    sortDir = sortDir === 'asc' ? 'desc' : 'asc';
-  } else {
-    sortCol = col; sortDir = 'asc';
-  }
-  document.querySelectorAll('th').forEach(t => t.classList.remove('sort-asc', 'sort-desc'));
-  th.classList.add(sortDir === 'asc' ? 'sort-asc' : 'sort-desc');
-  page = 1;
-  refreshUI();
-}
-
-function setFilter(fmt, btn) {
-  filterFmt = fmt;
-  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  page = 1;
-  refreshUI();
-}
-
-document.getElementById('searchInput').addEventListener('input', e => {
-  searchQ = e.target.value.toLowerCase().trim();
-  page = 1;
-  refreshUI();
-});
-
-// ── Export ────────────────────────────────────────────────────────────────
-function exportCSV() {
-  const rows = [['#','Barcode Value','Format','Source File','Scanned At']];
-  allBarcodes.forEach((b, i) => rows.push([i+1, b.value, b.format, b.filename, b.timestamp]));
-  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
-  download('barcodes.csv', 'text/csv', csv);
-  toast('CSV exported');
-}
-
-function exportExcel() {
-  const ws = XLSX.utils.aoa_to_sheet([
-    ['#','Barcode Value','Format','Source File','Scanned At'],
-    ...allBarcodes.map((b, i) => [i+1, b.value, b.format, b.filename, b.timestamp])
-  ]);
-  ws['!cols'] = [{wch:5},{wch:36},{wch:14},{wch:30},{wch:22}];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Barcodes');
-  XLSX.writeFile(wb, 'barcodes.xlsx');
-  toast('Excel file exported');
-}
-
-function download(name, type, content) {
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([content], { type }));
-  a.download = name;
-  a.click();
-}
-
-// ── Import CSV ────────────────────────────────────────────────────────────
-function importCSV() {
-  document.getElementById('csvImportInput').click();
-}
-
-document.getElementById('csvImportInput').addEventListener('change', e => {
-  const file = e.target.files[0];
-  if (!file) return;
-  const reader2 = new FileReader();
-  reader2.onload = ev => {
-    const lines = ev.target.result.split('\n').slice(1); // skip header
-    let added = 0;
-    lines.forEach(line => {
-      if (!line.trim()) return;
-      const cols = line.split(',').map(c => c.replace(/^"|"$/g,'').replace(/""/g,'"'));
-      if (cols[1]) {
-        allBarcodes.unshift({
-          id: crypto.randomUUID(),
-          value: cols[1] || '',
-          format: cols[2] || 'N/A',
-          filename: cols[3] || 'imported',
-          thumb: '',
-          timestamp: cols[4] || new Date().toLocaleString(),
+        // ===== EVENT LISTENERS =====
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
         });
-        added++;
-      }
-    });
-    e.target.value = '';
-    refreshUI();
-    toast(`${added} rows imported from CSV`);
-  };
-  reader2.readAsText(file);
-});
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) {
+                processFiles(e.dataTransfer.files);
+            }
+        });
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) {
+                processFiles(e.target.files);
+                e.target.value = '';
+            }
+        });
+        searchInput.addEventListener('input', renderTable);
+        formatFilter.addEventListener('change', renderTable);
 
-// ── Utilities ─────────────────────────────────────────────────────────────
-function copyValue(val) {
-  navigator.clipboard.writeText(val).then(() => toast('Copied!'));
-}
-
-function clearAll() {
-  if (!confirm('Clear all extracted barcodes?')) return;
-  allBarcodes = [];
-  filtered = [];
-  page = 1;
-  document.getElementById('searchInput').value = '';
-  searchQ = '';
-  filterFmt = 'all';
-  refreshUI();
-  toast('Table cleared');
-}
-
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-let toastTimer;
-function toast(msg) {
-  const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
-}
-</script>
+        // ===== INIT =====
+        renderTable();
+        showStatus('Ready. Drop images to extract barcodes.', 'done');
+    </script>
 </body>
 </html>
