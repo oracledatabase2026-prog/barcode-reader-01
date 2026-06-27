@@ -1,0 +1,1833 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>BarcodeVault Pro — Professional Barcode Extractor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet"/>
+<!--
+  ╔══════════════════════════════════════════════════════════════════════════════╗
+  ║  BarcodeVault Pro — Professional Barcode Extraction Engine                 ║
+  ║  Architecture: 6 self-contained modules in one HTML file                   ║
+  ║                                                                              ║
+  ║  Module 1 – ImageLoader   : All formats incl. JFIF/WebP/HEIC/PDF/ZIP      ║
+  ║  Module 2 – Preprocessor  : CLAHE, adaptive threshold, denoise, skew       ║
+  ║  Module 3 – BarcodeEngine : Native BarcodeDetector + ZXing dual-engine     ║
+  ║  Module 4 – Scanner       : Multi-scale, tile, rotate, region-proposal     ║
+  ║  Module 5 – ExportModule  : CSV / Excel / JSON / Clipboard                 ║
+  ║  Module 6 – UI            : Existing UI preserved + overlays + preview     ║
+  ║                                                                              ║
+  ║  Detection strategy (escalating aggressiveness, short-circuits on hit):     ║
+  ║    Pass 0 – Native BarcodeDetector on raw image (fastest)                  ║
+  ║    Pass 1 – Raw image, 4 rotations × 2 scales                              ║
+  ║    Pass 2 – Grayscale + contrast stretch, 4 rotations × 4 scales           ║
+  ║    Pass 3 – CLAHE equalisation, 4 rotations × 3 scales                    ║
+  ║    Pass 4 – Adaptive threshold (Otsu-like), 4 rotations × 2 scales         ║
+  ║    Pass 5 – Sharpen + high contrast, tile grid, 4 rotations                ║
+  ║    Pass 6 – Deskew + sharpen, 4 rotations                                  ║
+  ║    Pass 7 – Morphological close (gap fill), 4 rotations                    ║
+  ╚══════════════════════════════════════════════════════════════════════════════╝
+-->
+
+<!-- ── Libraries loaded synchronously so they're available immediately ── -->
+<script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+<!-- PDF.js for PDF page rendering -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<!-- JSZip for ZIP extraction -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+<style>
+/* ═══════════════════════════════════════════════════════════════════════
+   TOKENS — all existing tokens preserved; new ones added
+═══════════════════════════════════════════════════════════════════════ */
+:root {
+  --bg:        #0D0F12;
+  --surface:   #141720;
+  --card:      #1C2030;
+  --border:    #2A3045;
+  --accent:    #00E5A0;
+  --accent2:   #005C40;
+  --accent-dim:rgba(0,229,160,.08);
+  --accent-glow:rgba(0,229,160,.15);
+  --text:      #E8ECF4;
+  --muted:     #7A859E;
+  --danger:    #FF4D6A;
+  --warn:      #FFB547;
+  --info:      #4D9FFF;
+  --success:   #00E5A0;
+  --mono:      'IBM Plex Mono', monospace;
+  --sans:      'Inter', sans-serif;
+  --radius:    8px;
+  --tr:        160ms ease;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:100vh;line-height:1.6}
+
+/* ── Header (preserved) ── */
+header{display:flex;align-items:center;justify-content:space-between;padding:18px 32px;
+  border-bottom:1px solid var(--border);background:var(--surface);position:sticky;top:0;z-index:200}
+.logo{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:1.1rem;
+  font-weight:600;letter-spacing:-0.02em;color:var(--text);text-decoration:none}
+.logo-icon{width:32px;height:32px;display:flex;align-items:center;justify-content:center;
+  background:var(--accent);border-radius:6px}
+.header-right{display:flex;align-items:center;gap:12px}
+.header-badge{font-family:var(--mono);font-size:0.7rem;padding:3px 8px;
+  border:1px solid var(--border);border-radius:4px;color:var(--muted);letter-spacing:.08em}
+/* Engine pill in header */
+.engine-pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;
+  border-radius:20px;font-family:var(--mono);font-size:.68rem;
+  border:1px solid var(--border);color:var(--muted)}
+.engine-dot{width:6px;height:6px;border-radius:50%;background:#555;flex-shrink:0}
+.dot-native{background:var(--accent)}.dot-zxing{background:var(--warn)}.dot-none{background:var(--danger)}
+
+/* ── Layout ── */
+main{max-width:1200px;margin:0 auto;padding:36px 24px 80px}
+.hero{text-align:center;margin-bottom:40px}
+.hero h1{font-family:var(--mono);font-size:clamp(1.8rem,4vw,2.8rem);font-weight:600;
+  letter-spacing:-.03em;line-height:1.2;margin-bottom:12px}
+.hero h1 span{color:var(--accent)}
+.hero p{color:var(--muted);font-size:1rem;max-width:520px;margin:0 auto}
+
+/* ── Upload Zone (enhanced) ── */
+.upload-zone{border:2px dashed var(--border);border-radius:12px;padding:48px 24px;
+  text-align:center;cursor:pointer;transition:border-color var(--tr),background var(--tr);
+  position:relative;background:var(--card);margin-bottom:16px}
+.upload-zone:hover,.upload-zone.drag-over{border-color:var(--accent);background:var(--accent-glow)}
+.upload-zone input[type="file"]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.upload-icon{width:56px;height:56px;margin:0 auto 16px;border-radius:50%;
+  background:var(--accent-dim);display:flex;align-items:center;justify-content:center}
+.upload-zone h2{font-size:1.05rem;font-weight:600;margin-bottom:6px}
+.upload-zone p{color:var(--muted);font-size:.875rem}
+.file-types{margin-top:14px;display:flex;gap:6px;justify-content:center;flex-wrap:wrap}
+.file-types span{font-family:var(--mono);font-size:.7rem;letter-spacing:.06em;
+  color:var(--accent);background:var(--accent-dim);padding:2px 7px;border-radius:4px}
+
+/* ── Extra input row below drop zone ── */
+.input-row{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}
+.input-row .btn{flex:1;min-width:120px;justify-content:center}
+
+/* ── Queue panel ── */
+#queue-panel{background:var(--card);border:1px solid var(--border);border-radius:10px;
+  margin-bottom:20px;overflow:hidden;display:none}
+.queue-header{display:flex;align-items:center;justify-content:space-between;
+  padding:10px 16px;border-bottom:1px solid var(--border);font-size:.82rem;font-weight:600}
+.queue-list{max-height:180px;overflow-y:auto}
+.queue-item{display:flex;align-items:center;gap:10px;padding:8px 16px;
+  border-bottom:1px solid var(--border);font-size:.8rem}
+.queue-item:last-child{border-bottom:none}
+.qi-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+.qi-status{font-family:var(--mono);font-size:.72rem;padding:1px 6px;border-radius:3px;flex-shrink:0}
+.qi-pending{background:rgba(122,133,158,.15);color:var(--muted)}
+.qi-scanning{background:rgba(0,229,160,.1);color:var(--accent)}
+.qi-done{background:rgba(0,229,160,.08);color:var(--accent)}
+.qi-failed{background:rgba(255,77,106,.1);color:var(--danger)}
+.qi-retry{background:none;border:1px solid var(--danger);color:var(--danger);
+  padding:1px 6px;border-radius:3px;cursor:pointer;font-size:.68rem;margin-left:4px}
+.qi-count{font-family:var(--mono);font-size:.7rem;color:var(--muted);flex-shrink:0}
+
+/* ── Progress (preserved + enhanced) ── */
+#progress-area{display:none;margin-bottom:20px}
+.progress-bar-track{height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:8px}
+.progress-bar-fill{height:100%;background:linear-gradient(90deg,var(--accent),#00ffb3);
+  border-radius:3px;transition:width 200ms ease;width:0%}
+.progress-meta{display:flex;justify-content:space-between;align-items:center}
+#status-text{font-family:var(--mono);font-size:.78rem;color:var(--muted)}
+#progress-pct{font-family:var(--mono);font-size:.72rem;color:var(--accent)}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spin-label{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:.78rem;color:var(--accent)}
+.spin-label::before{content:'';display:inline-block;width:12px;height:12px;
+  border:2px solid var(--accent2);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite}
+
+/* ── Preview modal (new) ── */
+#preview-modal{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:500;
+  display:none;align-items:center;justify-content:center;padding:20px}
+#preview-modal.open{display:flex}
+.preview-inner{position:relative;max-width:90vw;max-height:90vh;background:var(--card);
+  border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.preview-canvas-wrap{overflow:auto;max-width:calc(90vw - 0px);max-height:calc(90vh - 60px);cursor:zoom-in}
+#preview-canvas{display:block}
+.preview-toolbar{display:flex;align-items:center;gap:8px;padding:10px 14px;
+  border-top:1px solid var(--border);background:var(--surface)}
+.preview-close{position:absolute;top:10px;right:10px;background:var(--surface);
+  border:1px solid var(--border);border-radius:6px;color:var(--text);
+  width:30px;height:30px;cursor:pointer;font-size:1rem;display:flex;align-items:center;justify-content:center}
+.preview-close:hover{border-color:var(--accent);color:var(--accent)}
+.zoom-label{font-family:var(--mono);font-size:.72rem;color:var(--muted)}
+
+/* ── Stats strip (preserved) ── */
+.stats-strip{display:flex;gap:24px;margin-bottom:20px;flex-wrap:wrap}
+.stat{display:flex;flex-direction:column}
+.stat-value{font-family:var(--mono);font-size:1.5rem;font-weight:600;color:var(--accent);line-height:1}
+.stat-label{font-size:.75rem;color:var(--muted);margin-top:2px}
+
+/* ── Toolbar (preserved + new buttons) ── */
+.toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:16px}
+.toolbar-left,.toolbar-right{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.search-box{position:relative}
+.search-box svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none}
+.search-box input{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+  color:var(--text);padding:8px 12px 8px 34px;font-family:var(--sans);font-size:.875rem;
+  width:220px;outline:none;transition:border-color var(--tr)}
+.search-box input::placeholder{color:var(--muted)}
+.search-box input:focus{border-color:var(--accent)}
+
+/* ── Buttons (preserved) ── */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:var(--radius);
+  font-family:var(--sans);font-size:.875rem;font-weight:500;cursor:pointer;border:none;
+  transition:background var(--tr),color var(--tr),opacity var(--tr)}
+.btn:disabled{opacity:.35;cursor:not-allowed}
+.btn-primary{background:var(--accent);color:#000}
+.btn-primary:hover:not(:disabled){background:#00ffb3}
+.btn-outline{background:transparent;border:1px solid var(--border);color:var(--text)}
+.btn-outline:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.btn-danger{background:transparent;border:1px solid var(--danger);color:var(--danger)}
+.btn-danger:hover:not(:disabled){background:rgba(255,77,106,.1)}
+.btn-sm{padding:5px 10px;font-size:.78rem}
+
+/* ── Filter bar (preserved) ── */
+.filter-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.filter-btn{padding:4px 12px;border-radius:20px;font-size:.8rem;
+  border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:all var(--tr)}
+.filter-btn.active,.filter-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+/* ── Table (preserved + confidence column) ── */
+.table-wrapper{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--card)}
+table{width:100%;border-collapse:collapse;font-size:.875rem}
+thead{background:var(--surface);border-bottom:1px solid var(--border)}
+th{padding:12px 14px;text-align:left;font-weight:600;font-size:.76rem;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--muted);white-space:nowrap;cursor:pointer;user-select:none}
+th:hover{color:var(--text)}
+th .sort-icon{display:inline-block;margin-left:5px;opacity:.4;font-size:.7rem}
+th.sort-asc  .sort-icon::after{content:'▲';opacity:1;color:var(--accent)}
+th.sort-desc .sort-icon::after{content:'▼';opacity:1;color:var(--accent)}
+th:not(.sort-asc):not(.sort-desc) .sort-icon::after{content:'⇅'}
+tbody tr{border-bottom:1px solid var(--border);transition:background var(--tr)}
+tbody tr:last-child{border-bottom:none}
+tbody tr:hover{background:rgba(255,255,255,.03)}
+td{padding:10px 14px;vertical-align:middle}
+td.barcode-value{font-family:var(--mono);font-size:.85rem;color:var(--accent);letter-spacing:.04em}
+.not-detected{color:var(--muted)!important;font-style:italic}
+.format-badge{display:inline-block;padding:2px 8px;border-radius:4px;
+  font-family:var(--mono);font-size:.7rem;letter-spacing:.04em;
+  background:var(--accent-dim);color:var(--accent)}
+.format-na{background:rgba(122,133,158,.12);color:var(--muted)}
+.thumb-cell img{width:48px;height:36px;object-fit:cover;border-radius:4px;
+  border:1px solid var(--border);cursor:pointer;transition:border-color var(--tr)}
+.thumb-cell img:hover{border-color:var(--accent)}
+/* Confidence bar */
+.conf-bar{display:flex;align-items:center;gap:6px}
+.conf-track{width:44px;height:4px;background:var(--border);border-radius:2px;overflow:hidden}
+.conf-fill{height:100%;border-radius:2px;transition:width .3s}
+.conf-high{background:var(--accent)}
+.conf-mid{background:var(--warn)}
+.conf-low{background:var(--danger)}
+.conf-num{font-family:var(--mono);font-size:.68rem;color:var(--muted)}
+/* Copy btn (preserved) */
+.copy-btn{background:none;border:none;cursor:pointer;color:var(--muted);
+  padding:4px;border-radius:4px;transition:color var(--tr);vertical-align:middle}
+.copy-btn:hover{color:var(--accent)}
+/* Preview btn */
+.prev-btn{background:none;border:none;cursor:pointer;color:var(--muted);
+  padding:4px;border-radius:4px;transition:color var(--tr);vertical-align:middle}
+.prev-btn:hover{color:var(--info)}
+
+/* ── Empty state (preserved) ── */
+#empty-state{padding:64px 24px;text-align:center}
+#empty-state svg{opacity:.18;margin-bottom:16px}
+#empty-state p{color:var(--muted);font-size:.9rem}
+#empty-state strong{display:block;color:var(--text);font-size:1rem;margin-bottom:6px}
+
+/* ── Toast (preserved) ── */
+#toast{position:fixed;bottom:28px;right:28px;background:var(--surface);
+  border:1px solid var(--border);border-left:3px solid var(--accent);
+  color:var(--text);padding:12px 18px;border-radius:var(--radius);
+  font-size:.875rem;font-family:var(--mono);opacity:0;transform:translateY(12px);
+  transition:opacity 260ms ease,transform 260ms ease;z-index:999;pointer-events:none}
+#toast.show{opacity:1;transform:translateY(0)}
+#toast.toast-warn{border-left-color:var(--warn)}
+#toast.toast-error{border-left-color:var(--danger)}
+
+/* ── Pagination (preserved) ── */
+.pagination{display:flex;align-items:center;gap:6px;margin-top:16px;justify-content:center}
+.page-btn{width:32px;height:32px;border-radius:6px;border:1px solid var(--border);
+  background:var(--card);color:var(--text);font-size:.8rem;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;transition:all var(--tr)}
+.page-btn:hover,.page-btn.active{border-color:var(--accent);color:var(--accent)}
+.page-btn:disabled{opacity:.3;cursor:not-allowed}
+
+/* ── Responsive ── */
+@media(max-width:680px){
+  header{padding:14px 16px}
+  main{padding:24px 14px 60px}
+  .search-box input{width:160px}
+  th,td{padding:10px 10px}
+  .stats-strip{gap:16px}
+}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+<header>
+  <a class="logo" href="#">
+    <div class="logo-icon">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+        <rect x="1" y="3" width="2" height="12" fill="#000"/>
+        <rect x="4" y="3" width="1" height="12" fill="#000"/>
+        <rect x="6" y="3" width="3" height="12" fill="#000"/>
+        <rect x="10" y="3" width="1" height="12" fill="#000"/>
+        <rect x="12" y="3" width="2" height="12" fill="#000"/>
+        <rect x="15" y="3" width="2" height="12" fill="#000"/>
+      </svg>
+    </div>
+    BarcodeVault Pro
+  </a>
+  <div class="header-right">
+    <div class="engine-pill" id="enginePill">
+      <div class="engine-dot" id="engineDot"></div>
+      <span id="engineLabel">Initialising…</span>
+    </div>
+    <span class="header-badge">PROFESSIONAL · MULTI-ENGINE</span>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <h1>Extract barcodes<br/><span>from any source</span></h1>
+    <p>Photos, PDFs, ZIP archives, screenshots, invoices, product packaging. Finds every barcode, every angle, every format — all inside your browser.</p>
+  </div>
+
+  <!-- Upload zone -->
+  <div class="upload-zone" id="uploadZone">
+    <input type="file" id="fileInput"
+      accept="image/*,.jfif,.jpe,.jfif,.heic,.avif,.pdf,.zip,.cbz"
+      multiple webkitdirectory="false"/>
+    <div class="upload-icon">
+      <svg width="26" height="26" fill="none" stroke="var(--accent)" stroke-width="2" viewBox="0 0 24 24">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+    </div>
+    <h2>Drop files here or click to browse</h2>
+    <p>Images, PDFs, ZIPs · Paste from clipboard (Ctrl+V) · Drag entire folders</p>
+    <div class="file-types">
+      <span>JPG</span><span>PNG</span><span>WEBP</span><span>JFIF</span>
+      <span>BMP</span><span>GIF</span><span>TIFF</span><span>AVIF</span>
+      <span>HEIC</span><span>PDF</span><span>ZIP</span>
+    </div>
+  </div>
+
+  <!-- Extra input row -->
+  <div class="input-row">
+    <button class="btn btn-outline btn-sm" id="btnFolder">📁 Scan Folder</button>
+    <button class="btn btn-outline btn-sm" id="btnPaste">📋 Paste Image</button>
+  </div>
+
+  <!-- Batch queue -->
+  <div id="queue-panel">
+    <div class="queue-header">
+      <span>Processing Queue</span>
+      <span id="queueMeta" style="color:var(--muted);font-weight:400"></span>
+    </div>
+    <div class="queue-list" id="queueList"></div>
+  </div>
+
+  <!-- Progress -->
+  <div id="progress-area">
+    <div class="progress-bar-track">
+      <div class="progress-bar-fill" id="progressFill"></div>
+    </div>
+    <div class="progress-meta">
+      <span id="status-text">Scanning…</span>
+      <span id="progress-pct">0%</span>
+    </div>
+  </div>
+
+  <!-- Stats strip -->
+  <div class="stats-strip" id="statsStrip" style="display:none">
+    <div class="stat"><span class="stat-value" id="statTotal">0</span><span class="stat-label">Barcodes found</span></div>
+    <div class="stat"><span class="stat-value" id="statImages">0</span><span class="stat-label">Files scanned</span></div>
+    <div class="stat"><span class="stat-value" id="statFormats">0</span><span class="stat-label">Unique formats</span></div>
+    <div class="stat"><span class="stat-value" id="statFailed">0</span><span class="stat-label">Not detected</span></div>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="toolbar" id="toolbar" style="display:none">
+    <div class="toolbar-left">
+      <div class="search-box">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input type="text" id="searchInput" placeholder="Search barcodes, filenames…"/>
+      </div>
+    </div>
+    <div class="toolbar-right">
+      <button class="btn btn-outline" id="importBtn" title="Import CSV">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        Import
+      </button>
+      <button class="btn btn-outline" id="exportJsonBtn" disabled title="Export JSON">{ } JSON</button>
+      <button class="btn btn-outline" id="exportCsvBtn" disabled title="Export CSV">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+        </svg>
+        CSV
+      </button>
+      <button class="btn btn-primary" id="exportXlsBtn" disabled title="Export Excel">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/><polyline points="8 13 10.5 17 13 13"/>
+        </svg>
+        Excel
+      </button>
+      <button class="btn btn-outline" id="copyAllBtn" disabled title="Copy all values">📋 Copy All</button>
+      <button class="btn btn-danger" id="clearBtn" disabled>
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <polyline points="3 6 5 6 21 6"/>
+          <path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/>
+        </svg>
+        Clear
+      </button>
+    </div>
+  </div>
+
+  <!-- Format filter -->
+  <div class="filter-bar" id="filterBar" style="display:none"></div>
+
+  <!-- Results table -->
+  <div class="table-wrapper">
+    <div id="empty-state">
+      <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+        <rect x="6"  y="14" width="6" height="36" fill="var(--text)"/>
+        <rect x="14" y="14" width="3" height="36" fill="var(--text)"/>
+        <rect x="19" y="14" width="8" height="36" fill="var(--text)"/>
+        <rect x="29" y="14" width="3" height="36" fill="var(--text)"/>
+        <rect x="34" y="14" width="6" height="36" fill="var(--text)"/>
+        <rect x="42" y="14" width="3" height="36" fill="var(--text)"/>
+        <rect x="47" y="14" width="4" height="36" fill="var(--text)"/>
+        <rect x="53" y="14" width="5" height="36" fill="var(--text)"/>
+      </svg>
+      <strong>No barcodes yet</strong>
+      <p>Drop images, PDFs, or ZIPs above — or paste an image from your clipboard</p>
+    </div>
+    <table id="barcodeTable" style="display:none">
+      <thead>
+        <tr>
+          <th style="width:46px">#</th>
+          <th style="width:64px">Preview</th>
+          <th data-col="value">Barcode Value <span class="sort-icon"></span></th>
+          <th data-col="format">Format <span class="sort-icon"></span></th>
+          <th data-col="confidence">Confidence <span class="sort-icon"></span></th>
+          <th data-col="filename">Source <span class="sort-icon"></span></th>
+          <th data-col="timestamp">Scanned At <span class="sort-icon"></span></th>
+          <th style="width:72px"></th>
+        </tr>
+      </thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+  <div class="pagination" id="pagination"></div>
+</main>
+
+<!-- Zoomable preview modal -->
+<div id="preview-modal">
+  <div class="preview-inner">
+    <button class="preview-close" id="previewClose">✕</button>
+    <div class="preview-canvas-wrap" id="previewWrap">
+      <canvas id="preview-canvas"></canvas>
+    </div>
+    <div class="preview-toolbar">
+      <button class="btn btn-outline btn-sm" id="zoomIn">＋ Zoom in</button>
+      <button class="btn btn-outline btn-sm" id="zoomOut">－ Zoom out</button>
+      <button class="btn btn-outline btn-sm" id="zoomFit">↔ Fit</button>
+      <span class="zoom-label" id="zoomLabel">100%</span>
+      <span style="flex:1"></span>
+      <span id="previewFilename" style="font-family:var(--mono);font-size:.72rem;color:var(--muted)"></span>
+    </div>
+  </div>
+</div>
+
+<!-- Hidden inputs -->
+<input type="file" id="csvImportInput" accept=".csv" style="display:none"/>
+<input type="file" id="folderInput" multiple style="display:none" webkitdirectory/>
+<div id="toast"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODULE 1 — ImageLoader
+     Responsibility: Convert ANY file format to HTMLImageElement + canvas.
+     Handles: JFIF, WebP, HEIC, AVIF, BMP, TIFF via readAsDataURL (bypasses
+     MIME mismatch). PDF → per-page ImageBitmap. ZIP → extract images.
+═══════════════════════════════════════════════════════════════════════ -->
+<script>
+const ImageLoader = (() => {
+  /** Convert any image file to {img, canvas, ctx, W, H, thumb} */
+  async function fileToImageData(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = e => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width; canvas.height = img.height;
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          ctx.drawImage(img, 0, 0);
+          const thumb = buildThumb(canvas);
+          resolve({ img, canvas, ctx, W: img.width, H: img.height, thumb });
+        };
+        img.onerror = () => {
+          // Fallback: try as JPEG regardless of extension (handles raw JFIF)
+          const blob = new Blob([reader.result], { type: 'image/jpeg' });
+          const u = URL.createObjectURL(blob);
+          const img2 = new Image();
+          img2.onload = () => {
+            URL.revokeObjectURL(u);
+            const canvas = document.createElement('canvas');
+            canvas.width = img2.width; canvas.height = img2.height;
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            ctx.drawImage(img2, 0, 0);
+            const thumb = buildThumb(canvas);
+            resolve({ img: img2, canvas, ctx, W: img2.width, H: img2.height, thumb });
+          };
+          img2.onerror = () => { URL.revokeObjectURL(u); reject(new Error('Image load failed: ' + file.name)); };
+          img2.src = u;
+        };
+        // readAsDataURL works for ALL formats — no MIME-type rejection
+        img.src = e.target.result;
+      };
+      reader.onerror = () => reject(new Error('FileReader error'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  /** Render all PDF pages to individual image-data objects */
+  async function pdfToImages(file) {
+    if (typeof pdfjsLib === 'undefined') {
+      console.warn('PDF.js not loaded');
+      return [];
+    }
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const ab = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
+    const results = [];
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const page = await pdf.getPage(p);
+      const vp = page.getViewport({ scale: 2.5 }); // high-res render
+      const canvas = document.createElement('canvas');
+      canvas.width = vp.width; canvas.height = vp.height;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      await page.render({ canvasContext: ctx, viewport: vp }).promise;
+      const thumb = buildThumb(canvas);
+      results.push({ canvas, ctx, W: canvas.width, H: canvas.height,
+        thumb, label: `${file.name} — page ${p}` });
+    }
+    return results;
+  }
+
+  /** Extract images from ZIP/CBZ */
+  async function zipToImages(file) {
+    if (typeof JSZip === 'undefined') { console.warn('JSZip not loaded'); return []; }
+    const zip = await JSZip.loadAsync(file);
+    const imageExts = /\.(jpe?g|jfif|png|webp|bmp|gif|tiff?|avif)$/i;
+    const promises = [];
+    zip.forEach((path, entry) => {
+      if (!entry.dir && imageExts.test(path)) {
+        promises.push(entry.async('blob').then(blob => {
+          const f = new File([blob], path.split('/').pop(),
+            { type: blob.type || 'image/jpeg' });
+          return fileToImageData(f).then(d => ({ ...d, label: `${file.name}/${path}` }));
+        }));
+      }
+    });
+    return Promise.all(promises);
+  }
+
+  function buildThumb(canvas) {
+    const MAX = 96;
+    const scale = Math.min(1, MAX / canvas.width, MAX / canvas.height);
+    const tc = document.createElement('canvas');
+    tc.width = Math.round(canvas.width * scale);
+    tc.height = Math.round(canvas.height * scale);
+    tc.getContext('2d').drawImage(canvas, 0, 0, tc.width, tc.height);
+    return tc.toDataURL('image/jpeg', 0.5);
+  }
+
+  /** Master loader — returns array of image-data objects */
+  async function load(file) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (ext === 'pdf') {
+      const pages = await pdfToImages(file);
+      return pages.length ? pages : [{ error: 'PDF rendered 0 pages', label: file.name }];
+    }
+    if (ext === 'zip' || ext === 'cbz') {
+      return await zipToImages(file);
+    }
+    const d = await fileToImageData(file);
+    return [{ ...d, label: file.name }];
+  }
+
+  return { load, buildThumb };
+})();
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODULE 2 — Preprocessor
+     Responsibility: All pixel-level image enhancement operations.
+     Every function takes a canvas, mutates it in place, returns it.
+     Functions are pure and composable.
+═══════════════════════════════════════════════════════════════════════ -->
+<script>
+const Preprocessor = (() => {
+
+  /** Clone a canvas without sharing pixel data */
+  function clone(src) {
+    const c = document.createElement('canvas');
+    c.width = src.width; c.height = src.height;
+    c.getContext('2d', { willReadFrequently: true }).drawImage(src, 0, 0);
+    return c;
+  }
+
+  /** Scale a canvas to new dimensions */
+  function scale(src, sw, sh) {
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(sw));
+    c.height = Math.max(1, Math.round(sh));
+    c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+    return c;
+  }
+
+  /** Rotate 0/90/180/270 → new canvas */
+  function rotate(src, deg) {
+    if (deg === 0) return clone(src);
+    const rad = deg * Math.PI / 180;
+    const sw = (deg === 90 || deg === 270) ? src.height : src.width;
+    const sh = (deg === 90 || deg === 270) ? src.width  : src.height;
+    const c = document.createElement('canvas'); c.width = sw; c.height = sh;
+    const ctx = c.getContext('2d');
+    ctx.translate(sw / 2, sh / 2); ctx.rotate(rad);
+    ctx.drawImage(src, -src.width / 2, -src.height / 2);
+    return c;
+  }
+
+  /** Convert to grayscale (BT.601 luminance) */
+  function grayscale(canvas) {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const d = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const px = d.data;
+    for (let i = 0; i < px.length; i += 4) {
+      const g = (px[i] * 0.299 + px[i+1] * 0.587 + px[i+2] * 0.114) | 0;
+      px[i] = px[i+1] = px[i+2] = g;
+    }
+    ctx.putImageData(d, 0, 0);
+    return canvas;
+  }
+
+  /** Stretch histogram so min→0 and max→255 */
+  function contrastStretch(canvas) {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const d = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const px = d.data;
+    let mn = 255, mx = 0;
+    for (let i = 0; i < px.length; i += 4) { if (px[i] < mn) mn = px[i]; if (px[i] > mx) mx = px[i]; }
+    if (mx === mn) return canvas;
+    const rng = mx - mn;
+    for (let i = 0; i < px.length; i += 4) {
+      const v = ((px[i] - mn) * 255 / rng + 0.5) | 0;
+      px[i] = px[i+1] = px[i+2] = v;
+    }
+    ctx.putImageData(d, 0, 0);
+    return canvas;
+  }
+
+  /**
+   * CLAHE — Contrast Limited Adaptive Histogram Equalisation
+   * Splits image into tiles, equalises each tile's histogram, interpolates.
+   * Critical for uneven lighting in warehouse/shelf photos.
+   */
+  function clahe(canvas, tileSize = 64, clipLimit = 3.0) {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const W = canvas.width, H = canvas.height;
+    const d = ctx.getImageData(0, 0, W, H);
+    const px = d.data;
+
+    const tilesX = Math.ceil(W / tileSize);
+    const tilesY = Math.ceil(H / tileSize);
+    // Build LUT for each tile
+    const luts = [];
+    for (let ty = 0; ty < tilesY; ty++) {
+      const row = [];
+      for (let tx = 0; tx < tilesX; tx++) {
+        const x0 = tx * tileSize, y0 = ty * tileSize;
+        const x1 = Math.min(x0 + tileSize, W);
+        const y1 = Math.min(y0 + tileSize, H);
+        const hist = new Int32Array(256);
+        for (let y = y0; y < y1; y++) {
+          for (let x = x0; x < x1; x++) {
+            hist[px[(y * W + x) * 4]]++;
+          }
+        }
+        // Clip histogram
+        const area = (x1 - x0) * (y1 - y0);
+        const clip = Math.max(1, Math.round(clipLimit * area / 256));
+        let excess = 0;
+        for (let i = 0; i < 256; i++) { if (hist[i] > clip) { excess += hist[i] - clip; hist[i] = clip; } }
+        const add = (excess / 256) | 0;
+        for (let i = 0; i < 256; i++) hist[i] += add;
+        // CDF → LUT
+        const lut = new Uint8Array(256);
+        let cdf = 0, cdfMin = -1;
+        for (let i = 0; i < 256; i++) {
+          cdf += hist[i];
+          if (cdfMin < 0 && cdf > 0) cdfMin = cdf;
+          lut[i] = Math.max(0, Math.min(255, Math.round((cdf - cdfMin) * 255 / (area - cdfMin))));
+        }
+        row.push(lut);
+      }
+      luts.push(row);
+    }
+
+    // Bilinear interpolation between tile LUTs
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const idx = (y * W + x) * 4;
+        const v = px[idx];
+        const tyF = y / tileSize - 0.5, txF = x / tileSize - 0.5;
+        const ty0 = Math.max(0, Math.floor(tyF)), ty1 = Math.min(tilesY - 1, ty0 + 1);
+        const tx0 = Math.max(0, Math.floor(txF)), tx1 = Math.min(tilesX - 1, tx0 + 1);
+        const wy = tyF - Math.floor(tyF), wx = txF - Math.floor(txF);
+        const out = (
+          luts[ty0][tx0][v] * (1 - wy) * (1 - wx) +
+          luts[ty0][tx1][v] * (1 - wy) * wx +
+          luts[ty1][tx0][v] * wy * (1 - wx) +
+          luts[ty1][tx1][v] * wy * wx
+        ) | 0;
+        px[idx] = px[idx+1] = px[idx+2] = out;
+      }
+    }
+    ctx.putImageData(d, 0, 0);
+    return canvas;
+  }
+
+  /**
+   * Adaptive threshold (local Otsu-like)
+   * Converts to binary black/white using local window mean.
+   * Best for documents, labels, invoices with uneven lighting.
+   */
+  function adaptiveThreshold(canvas, blockSize = 31, C = 10) {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const W = canvas.width, H = canvas.height;
+    const d = ctx.getImageData(0, 0, W, H);
+    const px = d.data;
+    const half = (blockSize - 1) >> 1;
+    const out = new Uint8ClampedArray(px);
+
+    // Integral image for fast block mean
+    const integral = new Float64Array((W + 1) * (H + 1));
+    for (let y = 1; y <= H; y++) {
+      for (let x = 1; x <= W; x++) {
+        integral[y * (W+1) + x] =
+          px[((y-1)*W+(x-1))*4] +
+          integral[(y-1)*(W+1)+x] +
+          integral[y*(W+1)+(x-1)] -
+          integral[(y-1)*(W+1)+(x-1)];
+      }
+    }
+
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const x0 = Math.max(0, x - half), x1 = Math.min(W - 1, x + half);
+        const y0 = Math.max(0, y - half), y1 = Math.min(H - 1, y + half);
+        const n = (x1 - x0 + 1) * (y1 - y0 + 1);
+        const sum = integral[(y1+1)*(W+1)+(x1+1)]
+          - integral[y0*(W+1)+(x1+1)]
+          - integral[(y1+1)*(W+1)+x0]
+          + integral[y0*(W+1)+x0];
+        const mean = sum / n;
+        const idx = (y * W + x) * 4;
+        const v = px[idx] < (mean - C) ? 0 : 255;
+        out[idx] = out[idx+1] = out[idx+2] = v;
+        out[idx+3] = 255;
+      }
+    }
+    ctx.putImageData(new ImageData(out, W, H), 0, 0);
+    return canvas;
+  }
+
+  /**
+   * 3×3 Gaussian blur — reduces noise before thresholding
+   */
+  function gaussianBlur(canvas) {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const W = canvas.width, H = canvas.height;
+    const d = ctx.getImageData(0, 0, W, H);
+    const src = d.data;
+    const out = new Uint8ClampedArray(src);
+    const k = [1,2,1, 2,4,2, 1,2,1]; // Gaussian kernel ÷16
+    for (let y = 1; y < H-1; y++) {
+      for (let x = 1; x < W-1; x++) {
+        let sum = 0;
+        for (let ky = -1; ky <= 1; ky++)
+          for (let kx = -1; kx <= 1; kx++)
+            sum += src[((y+ky)*W+(x+kx))*4] * k[(ky+1)*3+(kx+1)];
+        const v = (sum / 16 + 0.5) | 0;
+        const idx = (y * W + x) * 4;
+        out[idx] = out[idx+1] = out[idx+2] = v;
+      }
+    }
+    ctx.putImageData(new ImageData(out, W, H), 0, 0);
+    return canvas;
+  }
+
+  /**
+   * Unsharp mask — enhances edges, critical for blurry product-photo barcodes
+   */
+  function sharpen(canvas, amount = 1.5) {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const W = canvas.width, H = canvas.height;
+    const d = ctx.getImageData(0, 0, W, H);
+    const src = d.data;
+    const out = new Uint8ClampedArray(src);
+    const center = 8 + amount;
+    for (let y = 1; y < H-1; y++) {
+      for (let x = 1; x < W-1; x++) {
+        const sum =
+          -src[((y-1)*W+(x-1))*4] - src[((y-1)*W+x)*4] - src[((y-1)*W+(x+1))*4]
+          -src[(y*W+(x-1))*4]     + center*src[(y*W+x)*4] - src[(y*W+(x+1))*4]
+          -src[((y+1)*W+(x-1))*4] - src[((y+1)*W+x)*4] - src[((y+1)*W+(x+1))*4];
+        const v = (sum / (amount + 1) + 0.5) | 0;
+        const idx = (y * W + x) * 4;
+        out[idx] = out[idx+1] = out[idx+2] = Math.max(0, Math.min(255, v));
+      }
+    }
+    ctx.putImageData(new ImageData(out, W, H), 0, 0);
+    return canvas;
+  }
+
+  /**
+   * Morphological dilation then erosion (closing) — closes gaps in barcode bars
+   * caused by printing defects or low print quality.
+   */
+  function morphClose(canvas, radius = 1) {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const W = canvas.width, H = canvas.height;
+    let d = ctx.getImageData(0, 0, W, H);
+    // Dilate (max filter)
+    let src = d.data, dilated = new Uint8ClampedArray(src);
+    for (let y = radius; y < H-radius; y++) {
+      for (let x = radius; x < W-radius; x++) {
+        let mx = 0;
+        for (let dy = -radius; dy <= radius; dy++)
+          for (let dx = -radius; dx <= radius; dx++)
+            if (src[((y+dy)*W+(x+dx))*4] > mx) mx = src[((y+dy)*W+(x+dx))*4];
+        const i = (y*W+x)*4;
+        dilated[i] = dilated[i+1] = dilated[i+2] = mx;
+      }
+    }
+    // Erode (min filter) on dilated
+    const eroded = new Uint8ClampedArray(dilated);
+    for (let y = radius; y < H-radius; y++) {
+      for (let x = radius; x < W-radius; x++) {
+        let mn = 255;
+        for (let dy = -radius; dy <= radius; dy++)
+          for (let dx = -radius; dx <= radius; dx++)
+            if (dilated[((y+dy)*W+(x+dx))*4] < mn) mn = dilated[((y+dy)*W+(x+dx))*4];
+        const i = (y*W+x)*4;
+        eroded[i] = eroded[i+1] = eroded[i+2] = mn;
+        eroded[i+3] = 255;
+      }
+    }
+    ctx.putImageData(new ImageData(eroded, W, H), 0, 0);
+    return canvas;
+  }
+
+  /**
+   * Auto-deskew: estimates dominant skew angle via Hough-like projection
+   * and rotates to correct it. Handles slightly tilted documents/labels.
+   */
+  function deskew(canvas) {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const W = canvas.width, H = canvas.height;
+    // Downsample for speed
+    const SW = Math.min(W, 400), SH = Math.min(H, 400);
+    const sc = Math.min(SW/W, SH/H);
+    const sc_c = scale(canvas, W*sc, H*sc);
+    grayscale(sc_c);
+    const sd = sc_c.getContext('2d', { willReadFrequently:true }).getImageData(0,0,sc_c.width,sc_c.height).data;
+    const sW = sc_c.width, sH = sc_c.height;
+
+    // Try angles from -15 to +15 degrees in 0.5° steps
+    let bestAngle = 0, bestScore = -Infinity;
+    for (let a = -15; a <= 15; a += 0.5) {
+      const rad = a * Math.PI / 180;
+      const cos = Math.cos(rad), sin = Math.sin(rad);
+      let score = 0;
+      // Project pixels onto rotated X axis, sum variance
+      const proj = new Float32Array(sW * 2);
+      for (let y = 0; y < sH; y++) {
+        for (let x = 0; x < sW; x++) {
+          const v = sd[(y*sW+x)*4];
+          if (v < 128) { // dark pixel
+            const rx = Math.round((x-sW/2)*cos - (y-sH/2)*sin + sW);
+            if (rx >= 0 && rx < proj.length) proj[rx]++;
+          }
+        }
+      }
+      let mean = 0;
+      for (let i = 0; i < proj.length; i++) mean += proj[i];
+      mean /= proj.length;
+      for (let i = 0; i < proj.length; i++) score += (proj[i] - mean) ** 2;
+      if (score > bestScore) { bestScore = score; bestAngle = a; }
+    }
+
+    if (Math.abs(bestAngle) < 0.5) return canvas; // no meaningful skew
+    return rotate(canvas, -bestAngle);
+  }
+
+  /**
+   * Build overlapping tile grid — finds barcodes in corners of complex scenes.
+   * Returns array of canvases.
+   */
+  function getTiles(canvas, overlap = 0.4) {
+    const tiles = [canvas];
+    const W = canvas.width, H = canvas.height;
+    if (W < 250 || H < 250) return tiles;
+    const tw = Math.round(W * (0.6 + overlap * 0.5));
+    const th = Math.round(H * (0.6 + overlap * 0.5));
+    const stepX = (W - tw) / 2, stepY = (H - th) / 2;
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 3; col++) {
+        const sx = Math.round(col * stepX);
+        const sy = Math.round(row * stepY);
+        const tc = document.createElement('canvas');
+        tc.width = Math.min(tw, W - sx); tc.height = Math.min(th, H - sy);
+        tc.getContext('2d').drawImage(canvas, sx, sy, tc.width, tc.height, 0, 0, tc.width, tc.height);
+        tiles.push(tc);
+      }
+    }
+    return tiles;
+  }
+
+  return { clone, scale, rotate, grayscale, contrastStretch, clahe,
+           adaptiveThreshold, gaussianBlur, sharpen, morphClose, deskew, getTiles };
+})();
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODULE 3 — BarcodeEngine
+     Responsibility: Wrap Native BarcodeDetector + ZXing into one unified
+     async API. Both return { value, format, confidence, bbox }.
+     Initialises asynchronously; callers await BarcodeEngine.ready.
+═══════════════════════════════════════════════════════════════════════ -->
+<script>
+const BarcodeEngine = (() => {
+  let engineType = 'none'; // 'native' | 'zxing' | 'none'
+  let nativeDet  = null;
+  let zxReader   = null;
+
+  const FORMAT_MAP = {
+    0:'AZTEC',1:'CODABAR',2:'CODE_39',3:'CODE_93',4:'CODE_128',
+    5:'DATA_MATRIX',6:'EAN_8',7:'EAN_13',8:'ITF',9:'MAXICODE',
+    10:'PDF_417',11:'QR_CODE',12:'RSS_14',13:'RSS_EXPANDED',
+    14:'UPC_A',15:'UPC_E',16:'UPC_EAN_EXTENSION'
+  };
+
+  function normFormat(raw) {
+    if (raw == null) return 'UNKNOWN';
+    if (typeof raw === 'number') return FORMAT_MAP[raw] || 'FORMAT_' + raw;
+    const s = String(raw);
+    const m = s.match(/\b(QR_CODE|CODE_128|CODE_39|CODE_93|EAN_13|EAN_8|UPC_A|UPC_E|PDF_417|AZTEC|DATA_MATRIX|ITF|CODABAR|MAXICODE|RSS_14|RSS_EXPANDED|UPC_EAN_EXTENSION)\b/);
+    if (m) return m[1];
+    const n = parseInt(s);
+    if (!isNaN(n) && FORMAT_MAP[n]) return FORMAT_MAP[n];
+    return s.replace(/BarcodeFormat\s*\{?\s*|\s*\}$/g,'').trim() || 'UNKNOWN';
+  }
+
+  let _resolveReady;
+  const ready = new Promise(r => { _resolveReady = r; });
+
+  async function init() {
+    // ── Try Native BarcodeDetector ──
+    if (typeof BarcodeDetector !== 'undefined') {
+      try {
+        const fmts = await BarcodeDetector.getSupportedFormats();
+        nativeDet  = new BarcodeDetector({ formats: fmts });
+        engineType = 'native';
+        _updatePill('dot-native', `Native BarcodeDetector · ${fmts.length} formats`);
+        _resolveReady('native');
+        return;
+      } catch (_) { /* fall through */ }
+    }
+    // ── Try ZXing ──
+    await _loadZXing();
+  }
+
+  async function _loadZXing() {
+    const urls = [
+      'https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js',
+      'https://cdn.jsdelivr.net/npm/@zxing/library@0.19.1/umd/index.min.js'
+    ];
+    // Check if already loaded by <script> tag at top
+    if (typeof ZXing !== 'undefined') {
+      return _initZXReader();
+    }
+    for (const url of urls) {
+      try {
+        await new Promise((res, rej) => {
+          const s = document.createElement('script');
+          s.src = url; s.onload = res; s.onerror = rej;
+          document.head.appendChild(s);
+        });
+        if (typeof ZXing !== 'undefined') return _initZXReader();
+      } catch (_) { /* try next */ }
+    }
+    _updatePill('dot-none', 'No engine — use Chrome/Edge');
+    _resolveReady('none');
+  }
+
+  function _initZXReader() {
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+      ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.DATA_MATRIX,
+      ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39,
+      ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
+      ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E,
+      ZXing.BarcodeFormat.PDF_417, ZXing.BarcodeFormat.AZTEC,
+      ZXing.BarcodeFormat.ITF, ZXing.BarcodeFormat.CODABAR,
+      ZXing.BarcodeFormat.CODE_93
+    ]);
+    zxReader   = new ZXing.BrowserMultiFormatReader(hints);
+    engineType = 'zxing';
+    _updatePill('dot-zxing', 'ZXing 0.19.1 · 13 formats');
+    _resolveReady('zxing');
+  }
+
+  function _updatePill(dotClass, text) {
+    const dot = document.getElementById('engineDot');
+    const lbl = document.getElementById('engineLabel');
+    if (dot) dot.className = 'engine-dot ' + dotClass;
+    if (lbl) lbl.textContent = text;
+  }
+
+  /**
+   * Decode a canvas → array of { value, format, confidence, bbox }
+   * Returns [] if nothing found.
+   */
+  async function decode(canvas) {
+    if (engineType === 'native') {
+      try {
+        const bmp   = await createImageBitmap(canvas);
+        const codes = await nativeDet.detect(bmp);
+        bmp.close();
+        return (codes || []).map(c => ({
+          value:      c.rawValue,
+          format:     normFormat(c.format),
+          confidence: 0.95, // native API doesn't expose confidence; assume high
+          bbox:       c.boundingBox
+            ? { x: c.boundingBox.x, y: c.boundingBox.y,
+                w: c.boundingBox.width, h: c.boundingBox.height }
+            : null
+        }));
+      } catch (_) { return []; }
+    }
+
+    if (engineType === 'zxing') {
+      const blob = await new Promise(res =>
+        canvas.toBlob(b => res(b), 'image/png')
+      );
+      if (!blob) return [];
+      const url = URL.createObjectURL(blob);
+      try {
+        const res = await zxReader.decodeFromImageUrl(url);
+        URL.revokeObjectURL(url);
+        if (!res) return [];
+        const rp = res.getResultPoints ? res.getResultPoints() : [];
+        let bbox = null;
+        if (rp && rp.length >= 2) {
+          const xs = rp.map(p => p.getX()), ys = rp.map(p => p.getY());
+          bbox = { x: Math.min(...xs), y: Math.min(...ys),
+                   w: Math.max(...xs) - Math.min(...xs),
+                   h: Math.max(...ys) - Math.min(...ys) };
+        }
+        return [{ value: res.getText(), format: normFormat(res.getBarcodeFormat()),
+                  confidence: 0.85, bbox }];
+      } catch (_) {
+        URL.revokeObjectURL(url);
+        return [];
+      }
+    }
+
+    return [];
+  }
+
+  function getType() { return engineType; }
+
+  return { ready, init, decode, getType };
+})();
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODULE 4 — Scanner
+     Responsibility: Orchestrate the full multi-pass detection pipeline.
+     Escalates preprocessing aggressiveness, short-circuits on success.
+     Returns ALL unique barcodes found in one image.
+═══════════════════════════════════════════════════════════════════════ -->
+<script>
+const Scanner = (() => {
+  const ROTATIONS = [0, 90, 180, 270];
+
+  /** Try decode on one canvas; add new results to seen/results */
+  async function _try(canvas, seen, results) {
+    const found = await BarcodeEngine.decode(canvas);
+    let any = false;
+    for (const f of found) {
+      if (!seen.has(f.value)) {
+        seen.add(f.value);
+        results.push(f);
+        any = true;
+      }
+    }
+    return any;
+  }
+
+  /** Try a canvas at all 4 rotations */
+  async function _tryRotations(canvas, seen, results) {
+    for (const deg of ROTATIONS) {
+      const c = Preprocessor.rotate(canvas, deg);
+      if (await _try(c, seen, results)) return true;
+    }
+    return false;
+  }
+
+  /** Try a canvas + its tile grid at all rotations */
+  async function _tryTiledRotations(canvas, seen, results) {
+    const tiles = Preprocessor.getTiles(canvas);
+    for (const tile of tiles) {
+      for (const deg of ROTATIONS) {
+        const c = Preprocessor.rotate(tile, deg);
+        if (await _try(c, seen, results)) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Full scan pipeline for one image-data object.
+   * Returns array of { value, format, confidence, bbox, passName }
+   */
+  async function scan(imageData) {
+    const { canvas, W, H, thumb } = imageData;
+    const seen    = new Set();
+    const results = [];
+
+    // Shared helper to append passName
+    async function tryPass(passCanvas, passName, useTiles = false) {
+      const fn = useTiles ? _tryTiledRotations : _tryRotations;
+      const before = results.length;
+      await fn(passCanvas, seen, results);
+      const found = results.slice(before);
+      found.forEach(r => { if (!r.passName) r.passName = passName; });
+      return found.length > 0;
+    }
+
+    // ── Pass 0: Raw, native scale (fastest — exit immediately if found) ──
+    if (await tryPass(canvas, 'raw')) return _attach(results, thumb);
+
+    // ── Pass 1: Raw × 2 upscale ──
+    const up2 = Preprocessor.scale(canvas, W * 2, H * 2);
+    if (await tryPass(up2, 'raw×2')) return _attach(results, thumb);
+
+    // ── Pass 2: Grayscale + contrast stretch, 4 scales ──
+    for (const sc of [1, 1.5, 2, 0.75]) {
+      const c = Preprocessor.scale(canvas, W * sc, H * sc);
+      Preprocessor.grayscale(c); Preprocessor.contrastStretch(c);
+      if (await tryPass(c, `gray+stretch×${sc}`)) return _attach(results, thumb);
+    }
+
+    // ── Pass 3: CLAHE, 3 scales ──
+    for (const sc of [1, 1.5, 2]) {
+      const c = Preprocessor.scale(canvas, W * sc, H * sc);
+      Preprocessor.grayscale(c); Preprocessor.clahe(c, 48, 3);
+      if (await tryPass(c, `clahe×${sc}`)) return _attach(results, thumb);
+    }
+
+    // ── Pass 4: Gaussian blur → adaptive threshold (best for documents) ──
+    for (const sc of [1, 1.5]) {
+      const c = Preprocessor.scale(canvas, W * sc, H * sc);
+      Preprocessor.grayscale(c); Preprocessor.gaussianBlur(c);
+      Preprocessor.adaptiveThreshold(c, 31, 8);
+      if (await tryPass(c, `adaptive-thresh×${sc}`)) return _attach(results, thumb);
+    }
+
+    // ── Pass 5: Sharpen + high contrast + tile scan ──
+    for (const [sc, contrastFactor] of [[1, 2.0], [1.5, 1.8], [2, 1.5]]) {
+      const c = Preprocessor.scale(canvas, W * sc, H * sc);
+      Preprocessor.grayscale(c);
+      Preprocessor.contrastStretch(c);
+      Preprocessor.sharpen(c, 2.5);
+      // Manual contrast boost via pixel data
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      const d2 = ctx.getImageData(0, 0, c.width, c.height);
+      for (let i = 0; i < d2.data.length; i += 4) {
+        const v = Math.max(0, Math.min(255, ((d2.data[i] - 128) * contrastFactor + 128) | 0));
+        d2.data[i] = d2.data[i+1] = d2.data[i+2] = v;
+      }
+      ctx.putImageData(d2, 0, 0);
+      if (await tryPass(c, `sharp+contrast×${sc}`, true)) return _attach(results, thumb);
+    }
+
+    // ── Pass 6: Deskew + CLAHE (tilted labels/documents) ──
+    {
+      const c = Preprocessor.clone(canvas);
+      Preprocessor.grayscale(c);
+      const deskewed = Preprocessor.deskew(c);
+      Preprocessor.clahe(deskewed, 48, 3);
+      if (await tryPass(deskewed, 'deskew+clahe', true)) return _attach(results, thumb);
+    }
+
+    // ── Pass 7: Morphological closing (broken/gapped bars) ──
+    for (const radius of [1, 2]) {
+      const c = Preprocessor.scale(canvas, W * 1.5, H * 1.5);
+      Preprocessor.grayscale(c); Preprocessor.contrastStretch(c);
+      Preprocessor.morphClose(c, radius);
+      if (await tryPass(c, `morph-close-r${radius}`, true)) return _attach(results, thumb);
+    }
+
+    // Nothing found after all passes
+    return [{ value: '— not detected —', format: 'N/A', confidence: 0,
+              bbox: null, passName: 'all-failed', thumb }];
+  }
+
+  function _attach(results, thumb) {
+    results.forEach(r => { if (!r.thumb) r.thumb = thumb; });
+    return results;
+  }
+
+  return { scan };
+})();
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODULE 5 — ExportModule
+     Responsibility: CSV, Excel, JSON, clipboard export.
+     All exports include: value, format, confidence, filename,
+     dimensions, bbox coordinates, timestamp.
+═══════════════════════════════════════════════════════════════════════ -->
+<script>
+const ExportModule = (() => {
+  function _rows(barcodes) {
+    return barcodes
+      .filter(b => b.value !== '— not detected —')
+      .map((b, i) => ({
+        '#':          i + 1,
+        'Barcode Value': b.value,
+        'Format':        b.format,
+        'Confidence':    b.confidence != null ? (b.confidence * 100).toFixed(0) + '%' : '—',
+        'Source File':   b.filename,
+        'Width':         b.imgW || '—',
+        'Height':        b.imgH || '—',
+        'BBox X':        b.bbox ? Math.round(b.bbox.x) : '—',
+        'BBox Y':        b.bbox ? Math.round(b.bbox.y) : '—',
+        'BBox W':        b.bbox ? Math.round(b.bbox.w) : '—',
+        'BBox H':        b.bbox ? Math.round(b.bbox.h) : '—',
+        'Scanned At':    b.timestamp,
+      }));
+  }
+
+  function toCSV(barcodes) {
+    const rows = _rows(barcodes);
+    if (!rows.length) return '';
+    const headers = Object.keys(rows[0]);
+    const lines = [headers, ...rows.map(r => headers.map(h => r[h]))];
+    return lines.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+  }
+
+  function toJSON(barcodes) {
+    return JSON.stringify(_rows(barcodes), null, 2);
+  }
+
+  function downloadCSV(barcodes, filename = 'barcodes.csv') {
+    const csv = toCSV(barcodes);
+    if (!csv) return;
+    _dl(filename, 'text/csv;charset=utf-8', '\uFEFF' + csv); // BOM for Excel UTF-8
+  }
+
+  function downloadJSON(barcodes, filename = 'barcodes.json') {
+    const json = toJSON(barcodes);
+    _dl(filename, 'application/json', json);
+  }
+
+  function downloadExcel(barcodes, filename = 'barcodes.xlsx') {
+    const rows = _rows(barcodes);
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws['!cols'] = Object.keys(rows[0] || {}).map(() => ({ wch: 18 }));
+    ws['!cols'][1].wch = 36; // wider for barcode value
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Barcodes');
+    XLSX.writeFile(wb, filename);
+  }
+
+  function copyAll(barcodes) {
+    const text = barcodes
+      .filter(b => b.value !== '— not detected —')
+      .map(b => b.value)
+      .join('\n');
+    navigator.clipboard.writeText(text).catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta);
+      ta.select(); document.execCommand('copy');
+      document.body.removeChild(ta);
+    });
+    return text.split('\n').length;
+  }
+
+  function importCSV(text) {
+    const lines = text.split('\n').slice(1);
+    const out = [];
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const cols = line.split(',').map(c => c.replace(/^"|"$/g,'').replace(/""/g,'"'));
+      if (cols[1]) {
+        out.push({
+          id:         crypto.randomUUID(),
+          value:      cols[1] || '',
+          format:     cols[2] || 'N/A',
+          confidence: parseFloat(cols[3]) / 100 || 0,
+          filename:   cols[4] || 'imported',
+          timestamp:  cols[11] || new Date().toLocaleString(),
+          thumb:      '',
+          passName:   'imported',
+        });
+      }
+    }
+    return out;
+  }
+
+  function _dl(name, type, content) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([content], { type }));
+    a.download = name; a.click();
+  }
+
+  return { toCSV, toJSON, downloadCSV, downloadJSON, downloadExcel, copyAll, importCSV };
+})();
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODULE 6 — UI
+     Responsibility: All DOM wiring, state management, rendering.
+     Preserves ALL existing UI logic; adds queue, preview, overlay, JSON export.
+═══════════════════════════════════════════════════════════════════════ -->
+<script>
+const UI = (() => {
+  // ── State (same as original) ──
+  let allBarcodes = [];
+  let filtered    = [];
+  let sortCol     = 'timestamp';
+  let sortDir     = 'desc';
+  let filterFmt   = 'all';
+  let searchQ     = '';
+  let page        = 1;
+  const PAGE_SIZE = 20;
+
+  // ── Queue ──
+  let queue = [];          // { file, label, status, retries }
+  let queueRunning = false;
+
+  // ── Preview ──
+  let previewZoom = 1;
+  let previewSource = null; // { canvas, barcodes }
+
+  // ─── BOOT ───────────────────────────────────────────────────────────────────
+  function init() {
+    // Upload zone
+    const zone = document.getElementById('uploadZone');
+    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+    zone.addEventListener('drop', e => {
+      e.preventDefault(); zone.classList.remove('drag-over');
+      enqueueFiles([...e.dataTransfer.files]);
+    });
+
+    document.getElementById('fileInput').addEventListener('change', e => {
+      enqueueFiles([...e.target.files]); e.target.value = '';
+    });
+
+    // Folder input
+    document.getElementById('btnFolder').addEventListener('click', () =>
+      document.getElementById('folderInput').click());
+    document.getElementById('folderInput').addEventListener('change', e => {
+      enqueueFiles([...e.target.files]); e.target.value = '';
+    });
+
+    // Clipboard paste
+    document.getElementById('btnPaste').addEventListener('click', () => pasteFromClipboard());
+    document.addEventListener('paste', e => {
+      const items = [...(e.clipboardData?.items || [])];
+      const imageItem = items.find(it => it.type.startsWith('image/'));
+      if (imageItem) {
+        const file = imageItem.getAsFile();
+        if (file) { enqueueFiles([file]); e.preventDefault(); }
+      }
+    });
+
+    // Toolbar buttons
+    document.getElementById('importBtn').addEventListener('click', () =>
+      document.getElementById('csvImportInput').click());
+    document.getElementById('csvImportInput').addEventListener('change', e => {
+      const file = e.target.files[0]; if (!file) return;
+      const fr = new FileReader();
+      fr.onload = ev => {
+        const imported = ExportModule.importCSV(ev.target.result);
+        imported.forEach(b => allBarcodes.unshift(b));
+        refreshUI(); toast(`${imported.length} rows imported`);
+      };
+      fr.readAsText(file); e.target.value = '';
+    });
+
+    document.getElementById('exportCsvBtn').addEventListener('click', () => {
+      ExportModule.downloadCSV(allBarcodes); toast('CSV exported');
+    });
+    document.getElementById('exportXlsBtn').addEventListener('click', () => {
+      ExportModule.downloadExcel(allBarcodes); toast('Excel exported');
+    });
+    document.getElementById('exportJsonBtn').addEventListener('click', () => {
+      ExportModule.downloadJSON(allBarcodes); toast('JSON exported');
+    });
+    document.getElementById('copyAllBtn').addEventListener('click', () => {
+      const n = ExportModule.copyAll(allBarcodes);
+      toast(`${n} barcode${n !== 1 ? 's' : ''} copied to clipboard`);
+    });
+    document.getElementById('clearBtn').addEventListener('click', clearAll);
+
+    // Search
+    document.getElementById('searchInput').addEventListener('input', e => {
+      searchQ = e.target.value.toLowerCase().trim(); page = 1; refreshUI();
+    });
+
+    // Column sort
+    document.querySelectorAll('th[data-col]').forEach(th => {
+      th.addEventListener('click', () => sortBy(th.dataset.col, th));
+    });
+
+    // Preview modal
+    document.getElementById('previewClose').addEventListener('click', closePreview);
+    document.getElementById('preview-modal').addEventListener('click', e => {
+      if (e.target === e.currentTarget) closePreview();
+    });
+    document.getElementById('zoomIn').addEventListener('click', () => setZoom(previewZoom * 1.4));
+    document.getElementById('zoomOut').addEventListener('click', () => setZoom(previewZoom / 1.4));
+    document.getElementById('zoomFit').addEventListener('click', () => setZoom(1));
+
+    refreshUI();
+  }
+
+  // ─── QUEUE MANAGEMENT ───────────────────────────────────────────────────────
+  function enqueueFiles(files) {
+    const supported = /\.(jpe?g|jfif|png|webp|bmp|gif|tiff?|avif|heic|pdf|zip|cbz)$/i;
+    const valid = files.filter(f =>
+      f.type.startsWith('image/') ||
+      supported.test(f.name) ||
+      f.type === 'application/pdf' ||
+      f.type === 'application/zip'
+    );
+    if (!valid.length) { toast('No supported files found', 'warn'); return; }
+
+    valid.forEach(file => {
+      queue.push({ file, label: file.name, status: 'pending', retries: 0 });
+    });
+
+    renderQueue();
+    if (!queueRunning) processQueue();
+  }
+
+  async function processQueue() {
+    queueRunning = true;
+    const prog   = document.getElementById('progress-area');
+    const fill   = document.getElementById('progressFill');
+    const status = document.getElementById('status-text');
+    const pct    = document.getElementById('progress-pct');
+    prog.style.display = 'block';
+
+    const total = queue.filter(q => q.status === 'pending').length;
+    let done = 0, found = 0;
+
+    for (const item of queue) {
+      if (item.status !== 'pending' && item.status !== 'retry') continue;
+      item.status = 'scanning';
+      renderQueue();
+
+      const pctVal = Math.round((done / total) * 100);
+      fill.style.width = pctVal + '%';
+      pct.textContent  = pctVal + '%';
+      status.innerHTML = `<span class="spin-label">Scanning ${escHtml(item.label)} (${done + 1}/${total})</span>`;
+
+      try {
+        await BarcodeEngine.ready;
+        const imageDataList = await ImageLoader.load(item.file);
+
+        for (const imgData of imageDataList) {
+          if (imgData.error) { continue; }
+          const barcodes = await Scanner.scan(imgData);
+          for (const b of barcodes) {
+            allBarcodes.unshift({
+              id:         crypto.randomUUID(),
+              value:      b.value,
+              format:     b.format,
+              confidence: b.confidence ?? 0,
+              filename:   imgData.label || item.file.name,
+              imgW:       imgData.W,
+              imgH:       imgData.H,
+              bbox:       b.bbox,
+              thumb:      b.thumb || imgData.thumb,
+              passName:   b.passName,
+              timestamp:  new Date().toLocaleString(),
+              // Store canvas for preview
+              _canvas:    imgData.canvas,
+              _barcodes:  barcodes.filter(x => x.value !== '— not detected —'),
+            });
+            if (b.value !== '— not detected —') found++;
+          }
+        }
+
+        item.status = 'done';
+        item.count  = imageDataList.length;
+      } catch (err) {
+        console.error('Scan error:', item.label, err);
+        item.status = 'failed';
+        item.error  = err.message;
+      }
+
+      done++;
+      renderQueue();
+      refreshUI();
+    }
+
+    fill.style.width = '100%';
+    pct.textContent  = '100%';
+    status.textContent = `Done — ${found} barcode${found !== 1 ? 's' : ''} extracted from ${done} file${done !== 1 ? 's' : ''}.`;
+    setTimeout(() => { prog.style.display = 'none'; }, 4000);
+
+    queueRunning = false;
+    toast(`${found} barcode${found !== 1 ? 's' : ''} extracted`);
+  }
+
+  function retryItem(index) {
+    queue[index].status = 'retry';
+    renderQueue();
+    if (!queueRunning) processQueue();
+  }
+
+  function renderQueue() {
+    const panel = document.getElementById('queue-panel');
+    const list  = document.getElementById('queueList');
+    const meta  = document.getElementById('queueMeta');
+    if (!queue.length) { panel.style.display = 'none'; return; }
+    panel.style.display = 'block';
+
+    const counts = { pending:0, scanning:0, done:0, failed:0, retry:0 };
+    queue.forEach(q => { counts[q.status] = (counts[q.status] || 0) + 1; });
+    meta.textContent = `${counts.done} done · ${counts.failed} failed · ${counts.pending + counts.scanning} pending`;
+
+    list.innerHTML = queue.slice(-50).map((item, i) => {
+      const statusMap = { pending:'qi-pending', scanning:'qi-scanning', done:'qi-done',
+                          failed:'qi-failed', retry:'qi-scanning' };
+      const cls = statusMap[item.status] || 'qi-pending';
+      const retryBtn = item.status === 'failed'
+        ? `<button class="qi-retry" data-idx="${i}">Retry</button>` : '';
+      const countBadge = item.status === 'done' && item.count > 1
+        ? `<span class="qi-count">${item.count} pages</span>` : '';
+      return `<div class="queue-item">
+        <span class="qi-name" title="${escAttr(item.label)}">${escHtml(item.label)}</span>
+        ${countBadge}
+        <span class="qi-status ${cls}">${item.status}</span>
+        ${retryBtn}
+      </div>`;
+    }).join('');
+
+    list.querySelectorAll('.qi-retry').forEach(btn => {
+      btn.addEventListener('click', () => retryItem(+btn.dataset.idx));
+    });
+  }
+
+  // ─── CLIPBOARD PASTE ────────────────────────────────────────────────────────
+  async function pasteFromClipboard() {
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const imgType = item.types.find(t => t.startsWith('image/'));
+        if (imgType) {
+          const blob = await item.getType(imgType);
+          const file = new File([blob], 'clipboard.' + imgType.split('/')[1], { type: imgType });
+          enqueueFiles([file]);
+          return;
+        }
+      }
+      toast('No image found in clipboard', 'warn');
+    } catch (_) {
+      toast('Clipboard access denied — use Ctrl+V to paste', 'warn');
+    }
+  }
+
+  // ─── PREVIEW MODAL ──────────────────────────────────────────────────────────
+  function openPreview(barcode) {
+    if (!barcode._canvas) return;
+    previewSource = barcode;
+    drawPreviewCanvas();
+    document.getElementById('previewFilename').textContent = barcode.filename;
+    document.getElementById('preview-modal').classList.add('open');
+  }
+
+  function drawPreviewCanvas() {
+    const src  = previewSource._canvas;
+    const out  = document.getElementById('preview-canvas');
+    out.width  = src.width;
+    out.height = src.height;
+    const ctx  = out.getContext('2d');
+    ctx.drawImage(src, 0, 0);
+
+    // Draw detection boxes for all barcodes found in this image
+    const barcodes = previewSource._barcodes || [];
+    barcodes.forEach(b => {
+      if (!b.bbox) return;
+      ctx.strokeStyle = '#00E5A0';
+      ctx.lineWidth   = Math.max(2, Math.round(src.width / 300));
+      ctx.strokeRect(b.bbox.x, b.bbox.y, b.bbox.w, b.bbox.h);
+      // Label
+      ctx.fillStyle = 'rgba(0,229,160,.85)';
+      const lh = Math.max(16, Math.round(src.width / 80));
+      ctx.fillRect(b.bbox.x, b.bbox.y - lh - 2, ctx.measureText(b.value).width + 8, lh + 4);
+      ctx.fillStyle = '#000';
+      ctx.font = `${lh}px "IBM Plex Mono", monospace`;
+      ctx.fillText(b.value, b.bbox.x + 4, b.bbox.y - 4);
+    });
+
+    setZoom(previewZoom);
+  }
+
+  function setZoom(z) {
+    previewZoom = Math.max(0.1, Math.min(8, z));
+    const canvas = document.getElementById('preview-canvas');
+    canvas.style.transform = `scale(${previewZoom})`;
+    canvas.style.transformOrigin = 'top left';
+    document.getElementById('zoomLabel').textContent = Math.round(previewZoom * 100) + '%';
+  }
+
+  function closePreview() {
+    document.getElementById('preview-modal').classList.remove('open');
+    previewSource = null; previewZoom = 1;
+  }
+
+  // ─── REFRESH UI (preserved from original) ───────────────────────────────────
+  function refreshUI() {
+    // Format filter bar
+    const formats   = [...new Set(allBarcodes.map(b => b.format).filter(f => f && f !== 'N/A'))];
+    const filterBar = document.getElementById('filterBar');
+    filterBar.innerHTML = `<button class="filter-btn ${filterFmt === 'all' ? 'active' : ''}" data-filter="all">All formats</button>`;
+    formats.forEach(f => {
+      filterBar.innerHTML += `<button class="filter-btn ${filterFmt === f ? 'active' : ''}" data-filter="${escHtml(f)}">${escHtml(f)}</button>`;
+    });
+    filterBar.querySelectorAll('.filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => setFilter(btn.dataset.filter, btn));
+    });
+
+    // Filter + search
+    filtered = allBarcodes.filter(b => {
+      const matchFmt  = filterFmt === 'all' || b.format === filterFmt;
+      const matchSrch = !searchQ || b.value.toLowerCase().includes(searchQ)
+                                 || b.filename.toLowerCase().includes(searchQ);
+      return matchFmt && matchSrch;
+    });
+
+    // Sort
+    filtered.sort((a, b) => {
+      let va = a[sortCol] ?? '', vb = b[sortCol] ?? '';
+      if (va < vb) return sortDir === 'asc' ? -1 : 1;
+      if (va > vb) return sortDir === 'asc' ?  1 : -1;
+      return 0;
+    });
+
+    // Stats
+    const detected = allBarcodes.filter(b => b.value !== '— not detected —');
+    const failed   = allBarcodes.filter(b => b.value === '— not detected —');
+    document.getElementById('statTotal').textContent   = detected.length;
+    document.getElementById('statImages').textContent  = [...new Set(allBarcodes.map(b => b.filename))].length;
+    document.getElementById('statFormats').textContent = [...new Set(detected.map(b => b.format))].length;
+    document.getElementById('statFailed').textContent  = failed.length;
+
+    const hasData = allBarcodes.length > 0;
+    ['statsStrip','toolbar','filterBar'].forEach(id => {
+      document.getElementById(id).style.display = hasData ? 'flex' : 'none';
+    });
+    document.getElementById('exportCsvBtn').disabled  = !hasData;
+    document.getElementById('exportXlsBtn').disabled  = !hasData;
+    document.getElementById('exportJsonBtn').disabled = !hasData;
+    document.getElementById('copyAllBtn').disabled    = !hasData;
+    document.getElementById('clearBtn').disabled      = !hasData;
+    document.getElementById('empty-state').style.display  = hasData ? 'none'  : 'block';
+    document.getElementById('barcodeTable').style.display = hasData ? 'table' : 'none';
+
+    renderPage();
+  }
+
+  function renderPage() {
+    const start = (page - 1) * PAGE_SIZE;
+    const slice = filtered.slice(start, start + PAGE_SIZE);
+    const body  = document.getElementById('tableBody');
+
+    body.innerHTML = slice.map((b, i) => {
+      const isNA     = b.value === '— not detected —';
+      const valClass = isNA ? 'barcode-value not-detected' : 'barcode-value';
+      const fmtClass = isNA ? 'format-badge format-na' : 'format-badge';
+
+      // Confidence bar
+      const conf = b.confidence ?? 0;
+      const confPct = Math.round(conf * 100);
+      const confClass = confPct >= 80 ? 'conf-high' : confPct >= 50 ? 'conf-mid' : 'conf-low';
+      const confBar = isNA ? '—' : `
+        <div class="conf-bar">
+          <div class="conf-track"><div class="conf-fill ${confClass}" style="width:${confPct}%"></div></div>
+          <span class="conf-num">${confPct}%</span>
+        </div>`;
+
+      const copyBtn = isNA ? '' : `
+        <button class="copy-btn" data-val="${escAttr(b.value)}" title="Copy value">
+          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+        </button>`;
+
+      const prevBtn = b._canvas ? `
+        <button class="prev-btn" data-idx="${start + i}" title="Preview with overlay">
+          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+        </button>` : '';
+
+      return `
+        <tr>
+          <td style="color:var(--muted);font-family:var(--mono);font-size:.78rem">${start + i + 1}</td>
+          <td class="thumb-cell">${b.thumb ? `<img src="${b.thumb}" alt="" loading="lazy" data-idx="${start + i}" style="cursor:pointer"/>` : ''}</td>
+          <td class="${valClass}">${escHtml(b.value)}</td>
+          <td><span class="${fmtClass}">${escHtml(b.format)}</span></td>
+          <td>${confBar}</td>
+          <td style="color:var(--muted);font-size:.82rem;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(b.filename)}">${escHtml(b.filename)}</td>
+          <td style="color:var(--muted);font-size:.8rem;white-space:nowrap">${escHtml(b.timestamp)}</td>
+          <td style="white-space:nowrap">${copyBtn}${prevBtn}</td>
+        </tr>`;
+    }).join('');
+
+    // Wire copy buttons
+    body.querySelectorAll('.copy-btn[data-val]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        navigator.clipboard.writeText(btn.dataset.val).then(() => toast('Copied!'))
+          .catch(() => { const ta = document.createElement('textarea'); ta.value = btn.dataset.val;
+            document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+            document.body.removeChild(ta); toast('Copied!'); });
+      });
+    });
+
+    // Wire preview buttons + thumbnail click
+    const openPrev = idx => openPreview(filtered[idx]);
+    body.querySelectorAll('.prev-btn[data-idx]').forEach(btn => {
+      btn.addEventListener('click', () => openPrev(+btn.dataset.idx));
+    });
+    body.querySelectorAll('img[data-idx]').forEach(img => {
+      img.addEventListener('click', () => openPrev(+img.dataset.idx));
+    });
+
+    renderPagination();
+  }
+
+  function renderPagination() {
+    const total = Math.ceil(filtered.length / PAGE_SIZE);
+    const pg    = document.getElementById('pagination');
+    if (total <= 1) { pg.innerHTML = ''; return; }
+
+    let html = `<button class="page-btn" id="pgPrev" ${page === 1 ? 'disabled' : ''}>‹</button>`;
+    for (let i = 1; i <= total; i++) {
+      if (i === 1 || i === total || Math.abs(i - page) <= 1)
+        html += `<button class="page-btn ${i === page ? 'active' : ''}" data-p="${i}">${i}</button>`;
+      else if (Math.abs(i - page) === 2)
+        html += `<span style="color:var(--muted);padding:0 4px">…</span>`;
+    }
+    html += `<button class="page-btn" id="pgNext" ${page === total ? 'disabled' : ''}>›</button>`;
+    pg.innerHTML = html;
+
+    pg.querySelector('#pgPrev').addEventListener('click', () => goPage(page - 1));
+    pg.querySelector('#pgNext').addEventListener('click', () => goPage(page + 1));
+    pg.querySelectorAll('.page-btn[data-p]').forEach(btn => {
+      btn.addEventListener('click', () => goPage(parseInt(btn.dataset.p)));
+    });
+  }
+
+  function goPage(p) {
+    const total = Math.ceil(filtered.length / PAGE_SIZE);
+    if (p < 1 || p > total) return;
+    page = p; renderPage();
+  }
+
+  function sortBy(col, th) {
+    sortDir = (sortCol === col && sortDir === 'asc') ? 'desc' : 'asc';
+    sortCol = col;
+    document.querySelectorAll('th').forEach(t => t.classList.remove('sort-asc','sort-desc'));
+    th.classList.add(sortDir === 'asc' ? 'sort-asc' : 'sort-desc');
+    page = 1; refreshUI();
+  }
+
+  function setFilter(fmt, btn) {
+    filterFmt = fmt;
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    page = 1; refreshUI();
+  }
+
+  function clearAll() {
+    if (!confirm('Clear all extracted barcodes?')) return;
+    allBarcodes = []; filtered = []; queue = []; page = 1;
+    document.getElementById('searchInput').value = '';
+    searchQ = ''; filterFmt = 'all';
+    renderQueue(); refreshUI();
+    toast('All data cleared');
+  }
+
+  // ─── UTILITIES ───────────────────────────────────────────────────────────────
+  let _toastTimer;
+  function toast(msg, type = 'success') {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = type === 'warn' ? 'toast-warn show' : type === 'error' ? 'toast-error show' : 'show';
+    clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function escAttr(s) {
+    return String(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  return { init };
+})();
+
+// ═══════════════════════════════════════════════════════════════════════
+// BOOT SEQUENCE
+// Wait for DOM, then init engine and UI in parallel.
+// ═══════════════════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+  BarcodeEngine.init();   // starts async engine detection
+  UI.init();              // wires DOM immediately; engine.ready is awaited inside processQueue
+});
+</script>
+
+</body>
+</html>
